@@ -168,6 +168,7 @@ const WebsearchCitedPlugin: Plugin = () => {
 	let selectedProvider: SelectedProviderID | undefined;
 	let selectedModel: string | undefined;
 	let openaiConfig: OpenAIWebsearchConfig = {};
+	let googleConfig: Record<string, unknown> = {};
 	let configError: string | undefined;
 
 	return Promise.resolve({
@@ -190,6 +191,7 @@ const WebsearchCitedPlugin: Plugin = () => {
 			selectedProvider = undefined;
 			selectedModel = undefined;
 			openaiConfig = {};
+			googleConfig = {};
 			configError = error;
 
 			if (selected) {
@@ -198,6 +200,9 @@ const WebsearchCitedPlugin: Plugin = () => {
 				if (selectedProvider === OPENAI_PROVIDER_ID) {
 					const openaiProvider = config.provider?.openai;
 					openaiConfig = parseOpenAIOptions(openaiProvider, selectedModel);
+				}
+				if (selectedProvider === GOOGLE_PROVIDER_ID) {
+					googleConfig = (config.provider?.google?.options as Record<string, unknown>) || {};
 				}
 			}
 
@@ -254,7 +259,7 @@ const WebsearchCitedPlugin: Plugin = () => {
 						throw new Error('Missing auth for provider "google". Authenticate via `opencode auth login`.');
 					}
 
-					const client = createGoogleWebsearchClient(selectedModel);
+					const client = createGoogleWebsearchClient(selectedModel, googleConfig);
 					return client.search(query, context.abort, getAuth);
 				},
 			}),

@@ -325,6 +325,37 @@ describe("WebsearchCitedPlugin", () => {
 		expect(typeof url === "string" ? url : "").toContain("gemini-custom-model");
 	});
 
+	it("normalizes a trailing slash in the configured Google baseURL", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse(
+				createResponse({
+					content: {
+						role: "model",
+						parts: [{ text: "Trailing slash response" }],
+					},
+				})
+			)
+		);
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				google: {
+					options: {
+						baseURL: "https://proxy.example.test/v1beta/",
+						websearch_cited: { model: "gemini-custom-model" },
+					},
+				},
+			},
+		} as Config);
+		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		const context = createToolContext();
+
+		await tool.execute({ query: "model query" }, context);
+
+		const [url] = fetchMock.mock.calls[0] ?? [];
+		expect(url).toBe("https://proxy.example.test/v1beta/models/gemini-custom-model:generateContent");
+	});
+
 	it("uses Code Assist endpoint and project when Google OAuth is present", async () => {
 		fetchMock.mockResolvedValueOnce(
 			createFetchResponse({

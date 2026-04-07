@@ -52,6 +52,7 @@ type CitationInsertion = {
 type GeminiWebSearchOptions = {
 	apiKey: string;
 	model: string;
+	baseURL?: string;
 	query: string;
 	abortSignal: AbortSignal;
 };
@@ -60,6 +61,7 @@ type GeminiClientConfig = {
 	mode: "api";
 	apiKey: string;
 	model: string;
+	baseURL?: string;
 };
 
 type OAuthAuthDetails = {
@@ -117,13 +119,14 @@ const CODE_ASSIST_HEADERS = {
 const tokenCache = new Map<string, { accessToken: string; expiresAt: number }>();
 const projectCache = new Map<string, string>();
 
-function buildGeminiUrl(model: string): string {
+function buildGeminiUrl(model: string, baseURL?: string): string {
 	const encoded = encodeURIComponent(model);
-	return `${GEMINI_API_BASE}/models/${encoded}:generateContent`;
+	const base = baseURL?.trim().replace(/\/+$/, "") || GEMINI_API_BASE;
+	return `${base}/models/${encoded}:generateContent`;
 }
 
 async function runGeminiWebSearch(options: GeminiWebSearchOptions): Promise<GeminiGenerateContentResponse> {
-	const response = await fetch(buildGeminiUrl(options.model), {
+	const response = await fetch(buildGeminiUrl(options.model, options.baseURL), {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -268,8 +271,9 @@ function insertMarkersByUtf8Index(text: string, insertions: CitationInsertion[])
 class GeminiApiKeyClient implements WebSearchClient {
 	private readonly apiKey: string;
 	private readonly model: string;
+	private readonly baseURL?: string;
 
-	constructor(apiKey: string, model: string) {
+	constructor(apiKey: string, model: string, baseURL?: string) {
 		const normalizedKey = apiKey.trim();
 		const normalizedModel = model.trim();
 		if (!normalizedKey || !normalizedModel) {
@@ -277,6 +281,7 @@ class GeminiApiKeyClient implements WebSearchClient {
 		}
 		this.apiKey = normalizedKey;
 		this.model = normalizedModel;
+		this.baseURL = baseURL;
 	}
 
 	async search(query: string, abortSignal: AbortSignal): Promise<string> {
@@ -284,6 +289,7 @@ class GeminiApiKeyClient implements WebSearchClient {
 		const response = await runGeminiWebSearch({
 			apiKey: this.apiKey,
 			model: this.model,
+			baseURL: this.baseURL,
 			query: normalizedQuery,
 			abortSignal,
 		});
@@ -573,7 +579,11 @@ async function requestGenerateContent(
 	};
 }
 
-function createGeminiOAuthWebSearchClient(authDetails: OAuthAuthDetails, model: string): WebSearchClient {
+function createGeminiOAuthWebSearchClient(
+	authDetails: OAuthAuthDetails,
+	model: string,
+	baseURL?: string
+): WebSearchClient {
 	const refreshParts = parseRefresh(authDetails.refresh ?? "");
 	const refreshToken = refreshParts.refreshToken;
 	if (!refreshToken) {
@@ -692,10 +702,14 @@ async function readErrorMessage(response: Response): Promise<string | undefined>
 }
 
 function createGeminiWebSearchClient(config: GeminiClientConfig): WebSearchClient {
-	return new GeminiApiKeyClient(config.apiKey, config.model);
+	return new GeminiApiKeyClient(config.apiKey, config.model, config.baseURL);
 }
 
-function createWebSearchClientForGoogle(authDetails: ProviderAuth, model: string): WebSearchClient {
+function createWebSearchClientForGoogle(
+	authDetails: ProviderAuth,
+	model: string,
+	googleConfig?: Record<string, unknown>
+): WebSearchClient {
 	if (authDetails.type === "api") {
 		const apiKey = extractApiKey(authDetails);
 		if (!apiKey) {
@@ -705,12 +719,13 @@ function createWebSearchClientForGoogle(authDetails: ProviderAuth, model: string
 			mode: "api",
 			apiKey,
 			model,
+			baseURL: googleConfig?.baseURL as string | undefined,
 		});
 	}
 
 	if (authDetails.type === "oauth") {
 		const oauthAuth = authDetails as OAuthAuthDetails;
-		return createGeminiOAuthWebSearchClient(oauthAuth, model);
+		return createGeminiOAuthWebSearchClient(oauthAuth, model, googleConfig?.baseURL as string | undefined);
 	}
 
 	throw new Error("Unsupported auth type for Google web search");
@@ -724,7 +739,7 @@ function extractApiKey(authDetails?: ProviderAuth | null): string | undefined {
 	return normalized === "" ? undefined : normalized;
 }
 
-export function createGoogleWebsearchClient(model: string): WebsearchClient {
+export function createGoogleWebsearchClient(model: string, googleConfig?: Record<string, unknown>): WebsearchClient {
 	const normalizedModel = model.trim();
 	if (!normalizedModel) {
 		throw new Error("Invalid Google web search model");
@@ -742,7 +757,7 @@ export function createGoogleWebsearchClient(model: string): WebsearchClient {
 				throw new Error('Missing auth for provider "google"');
 			}
 
-			const client = createWebSearchClientForGoogle(auth, normalizedModel);
+			const client = createWebSearchClientForGoogle(auth, normalizedModel, googleConfig);
 			return client.search(normalizedQuery, abortSignal);
 		},
 	};
