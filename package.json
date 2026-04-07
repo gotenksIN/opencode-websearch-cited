@@ -29,7 +29,8 @@
     "agent"
   ],
   "files": [
-    "dist",
+    "src",
+    "index.ts",
     "index.d.ts",
     "README.md",
     "LICENSE"
