@@ -1,7 +1,6 @@
-import { type Plugin, tool } from "@opencode-ai/plugin";
-import type { Config } from "@opencode-ai/sdk";
+import { type Config, type Plugin, tool } from "@opencode-ai/plugin";
 
-import { createGoogleWebsearchClient } from "./src/google.ts";
+import { createGoogleWebsearchClient, type GoogleWebsearchConfig } from "./src/google.ts";
 import { createOpenAIWebsearchClient, type OpenAIWebsearchConfig } from "./src/openai.ts";
 import { createOpenRouterWebsearchClient } from "./src/openrouter.ts";
 import type { GetAuth } from "./src/types.ts";
@@ -164,11 +163,30 @@ function parseOpenAIOptions(providerConfig: unknown, model: string | undefined):
 	return result;
 }
 
+function parseGoogleOptions(providerConfig: unknown): GoogleWebsearchConfig {
+	if (!isRecord(providerConfig)) {
+		return {};
+	}
+
+	const rawOptions = providerConfig.options;
+	if (!isRecord(rawOptions)) {
+		return {};
+	}
+
+	const result: GoogleWebsearchConfig = {};
+	const baseURL = rawOptions.baseURL;
+	if (typeof baseURL === "string" && baseURL.trim() !== "") {
+		result.baseURL = baseURL.trim();
+	}
+
+	return result;
+}
+
 const WebsearchCitedPlugin: Plugin = () => {
 	let selectedProvider: SelectedProviderID | undefined;
 	let selectedModel: string | undefined;
 	let openaiConfig: OpenAIWebsearchConfig = {};
-	let googleConfig: Record<string, unknown> = {};
+	let googleConfig: GoogleWebsearchConfig = {};
 	let configError: string | undefined;
 
 	return Promise.resolve({
@@ -202,7 +220,7 @@ const WebsearchCitedPlugin: Plugin = () => {
 					openaiConfig = parseOpenAIOptions(openaiProvider, selectedModel);
 				}
 				if (selectedProvider === GOOGLE_PROVIDER_ID) {
-					googleConfig = (config.provider?.google?.options as Record<string, unknown>) || {};
+					googleConfig = parseGoogleOptions(config.provider?.google);
 				}
 			}
 

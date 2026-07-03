@@ -168,6 +168,10 @@ function createPluginInput(): PluginInput {
 		project: {} as unknown as PluginInput["project"],
 		directory,
 		worktree: directory,
+		experimental_workspace: {
+			register() {},
+		},
+		serverUrl: new URL("http://localhost"),
 		$: Bun.$,
 	};
 	return input;

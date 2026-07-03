@@ -154,7 +154,7 @@ async function runOpenRouterWebSearch(options: {
 	const payload: unknown = await response.json();
 	const outputText = extractOutputText(payload);
 
-	if (!outputText || !outputText.trim()) {
+	if (!outputText?.trim()) {
 		return `Web search completed for "${normalizedQuery}", but no results were returned.`;
 	}
 

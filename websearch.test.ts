@@ -356,6 +356,37 @@ describe("WebsearchCitedPlugin", () => {
 		expect(url).toBe("https://proxy.example.test/v1beta/models/gemini-custom-model:generateContent");
 	});
 
+	it("ignores non-string Google baseURL values", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse(
+				createResponse({
+					content: {
+						role: "model",
+						parts: [{ text: "Default base URL response" }],
+					},
+				})
+			)
+		);
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				google: {
+					options: {
+						baseURL: true,
+						websearch_cited: { model: "gemini-custom-model" },
+					},
+				},
+			},
+		} as unknown as Config);
+		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		const context = createToolContext();
+
+		await tool.execute({ query: "model query" }, context);
+
+		const [url] = fetchMock.mock.calls[0] ?? [];
+		expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-custom-model:generateContent");
+	});
+
 	it("uses Code Assist endpoint and project when Google OAuth is present", async () => {
 		fetchMock.mockResolvedValueOnce(
 			createFetchResponse({

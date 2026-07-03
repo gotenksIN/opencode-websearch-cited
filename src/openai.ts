@@ -224,7 +224,7 @@ async function runOpenAIWebSearch(options: OpenAIWebSearchOptions): Promise<stri
 	const payload = await readOpenAIResponsePayload(response);
 	const text = extractOpenAIText(payload);
 
-	if (!text || !text.trim()) {
+	if (!text?.trim()) {
 		return `Web search completed for "${normalizedQuery}", but no results were returned.`;
 	}
 
