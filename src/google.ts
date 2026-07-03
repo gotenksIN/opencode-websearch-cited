@@ -162,7 +162,18 @@ async function runGeminiWebSearch(options: GeminiWebSearchOptions): Promise<Gemi
 		throw new Error(message ?? `Request failed with status ${response.status}`);
 	}
 
-	return (await response.json()) as GeminiGenerateContentResponse;
+	const payload = (await response.json()) as unknown;
+	if (payload && typeof payload === "object") {
+		const error = (payload as { error?: unknown }).error;
+		if (error && typeof error === "object") {
+			const message = (error as { message?: unknown }).message;
+			if (typeof message === "string" && message.trim() !== "") {
+				throw new Error(message.trim());
+			}
+		}
+	}
+
+	return payload as GeminiGenerateContentResponse;
 }
 
 export function formatWebSearchResponse(response: GeminiGenerateContentResponse, query: string): string {

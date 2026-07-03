@@ -402,6 +402,15 @@ describe("WebsearchCitedPlugin", () => {
 		expect(headers["x-goog-api-key"]).toBe("stored-key");
 	});
 
+	it("throws Google API error envelopes from successful responses", async () => {
+		fetchMock.mockResolvedValueOnce(createFetchResponse({ error: { message: "quota exceeded" } }));
+
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+
+		await expectThrowMessage(() => tool.execute({ query: "stored key query" }, createToolContext()), "quota exceeded");
+	});
+
 	it("uses the configured model", async () => {
 		fetchMock.mockResolvedValueOnce(
 			createFetchResponse(
@@ -821,8 +830,7 @@ describe("WebsearchCitedPlugin", () => {
 			type: "oauth",
 			access: "stale-access",
 			refresh: "refresh-token-retry|project-id|",
-			expires: Number.NaN,
-		});
+		} as ProviderAuth);
 
 		const context = createToolContext();
 
