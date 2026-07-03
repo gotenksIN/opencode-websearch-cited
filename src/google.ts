@@ -419,6 +419,17 @@ function cacheToken(refreshToken: string, accessToken: string, expiresAt?: numbe
 	}
 }
 
+function isAbortError(error: unknown): boolean {
+	if (error instanceof Error && error.name === "AbortError") {
+		return true;
+	}
+	return error instanceof DOMException && error.name === "AbortError";
+}
+
+function projectCacheKey(refreshToken: string, projectId?: string): string {
+	return `${refreshToken}\u0000${projectId ?? ""}`;
+}
+
 async function requestToken(refreshToken: string): Promise<RefreshedToken> {
 	const requestTime = Date.now();
 	const response = await fetch(OAUTH_TOKEN_ENDPOINT, {
@@ -511,7 +522,11 @@ async function loadManagedProject(
 			}
 
 			return (await response.json()) as LoadCodeAssistPayload;
-		} catch {}
+		} catch (error) {
+			if (abortSignal.aborted || isAbortError(error)) {
+				throw error;
+			}
+		}
 	}
 
 	return null;
@@ -544,7 +559,8 @@ async function resolveProjectId(
 		return refreshParts.managedProjectId;
 	}
 
-	const cached = projectCache.get(refreshToken);
+	const projectKey = projectCacheKey(refreshToken, refreshParts.projectId);
+	const cached = projectCache.get(projectKey);
 	if (cached) {
 		return cached;
 	}
@@ -555,7 +571,7 @@ async function resolveProjectId(
 	const resolvedManagedProjectId = extractManagedProjectId(loadPayload);
 
 	if (resolvedManagedProjectId) {
-		projectCache.set(refreshToken, resolvedManagedProjectId);
+		projectCache.set(projectKey, resolvedManagedProjectId);
 		return resolvedManagedProjectId;
 	}
 
@@ -617,18 +633,24 @@ async function requestGenerateContent(
 	let lastError: { status: number; message?: string } | undefined;
 
 	for (const baseUrl of CODE_ASSIST_GENERATE_ENDPOINTS) {
-		const response = await fetch(`${baseUrl}${GEMINI_CODE_ASSIST_GENERATE_PATH}`, {
-			method: "POST",
-			headers,
-			body,
-			signal: abortSignal,
-		});
+		let response: Response;
+		try {
+			response = await fetch(`${baseUrl}${GEMINI_CODE_ASSIST_GENERATE_PATH}`, {
+				method: "POST",
+				headers,
+				body,
+				signal: abortSignal,
+			});
+		} catch (error) {
+			if (abortSignal.aborted || isAbortError(error)) {
+				throw error;
+			}
+			lastError = { status: 502, message: error instanceof Error ? error.message : String(error) };
+			continue;
+		}
 
 		if (!response.ok) {
 			const message = await readErrorMessage(response);
-			if (response.status === 401 || response.status === 403) {
-				return { ok: false, status: response.status, message };
-			}
 			lastError = { status: response.status, message };
 			continue;
 		}
@@ -698,7 +720,7 @@ function createGeminiOAuthWebSearchClient(authDetails: OAuthAuthDetails, model: 
 				cacheToken(refreshToken, accessToken, expiresAt);
 			}
 
-			const effectiveProjectId = await resolveProjectId(accessToken, refreshToken, refreshParts, abortSignal);
+			let effectiveProjectId = await resolveProjectId(accessToken, refreshToken, refreshParts, abortSignal);
 
 			const firstAttempt = await requestGenerateContent(
 				accessToken,
@@ -724,6 +746,7 @@ function createGeminiOAuthWebSearchClient(authDetails: OAuthAuthDetails, model: 
 			expiresAt = refreshed.expiresAt;
 			refreshedThisRequest = true;
 			cacheToken(refreshToken, accessToken, expiresAt);
+			effectiveProjectId = await resolveProjectId(accessToken, refreshToken, refreshParts, abortSignal);
 
 			const retry = await requestGenerateContent(accessToken, effectiveProjectId, model, normalizedQuery, abortSignal);
 
@@ -737,36 +760,26 @@ function createGeminiOAuthWebSearchClient(authDetails: OAuthAuthDetails, model: 
 }
 
 function extractGenerateContentResponse(payload: unknown): GeminiGenerateContentResponse | undefined {
-	const candidateObject = (() => {
-		if (Array.isArray(payload)) {
-			for (const item of payload) {
-				if (item && typeof item === "object") {
-					return item as Record<string, unknown>;
-				}
-			}
-			return undefined;
+	const items = Array.isArray(payload) ? payload : [payload];
+
+	for (const item of items) {
+		if (!item || typeof item !== "object") {
+			continue;
 		}
-		if (payload && typeof payload === "object") {
-			return payload as Record<string, unknown>;
+
+		const candidateObject = item as Record<string, unknown>;
+		const withResponse = candidateObject as {
+			response?: unknown;
+			candidates?: unknown;
+		};
+
+		if (withResponse.response && typeof withResponse.response === "object") {
+			return withResponse.response as GeminiGenerateContentResponse;
 		}
-		return undefined;
-	})();
 
-	if (!candidateObject) {
-		return undefined;
-	}
-
-	const withResponse = candidateObject as {
-		response?: unknown;
-		candidates?: unknown;
-	};
-
-	if (withResponse.response && typeof withResponse.response === "object") {
-		return withResponse.response as GeminiGenerateContentResponse;
-	}
-
-	if (withResponse.candidates) {
-		return candidateObject as unknown as GeminiGenerateContentResponse;
+		if (withResponse.candidates) {
+			return candidateObject as unknown as GeminiGenerateContentResponse;
+		}
 	}
 
 	return undefined;

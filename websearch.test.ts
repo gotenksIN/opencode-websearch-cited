@@ -639,6 +639,128 @@ describe("WebsearchCitedPlugin", () => {
 		expect(parsed.project).toBe("load-project");
 	});
 
+	it("tries the next Code Assist generate endpoint after auth failure", async () => {
+		fetchMock
+			.mockResolvedValueOnce(createFetchResponse({ error: "daily forbidden" }, { ok: false, status: 403 }))
+			.mockResolvedValueOnce(
+				createFetchResponse({
+					response: createResponse({
+						content: { role: "model", parts: [{ text: "Fallback endpoint response" }] },
+					}),
+				})
+			);
+
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await invokeAuthLoader(hooks, "google", {
+			type: "oauth",
+			access: "test-access-token",
+			refresh: "refresh-token-generate-fallback|project-id|managed-project",
+			expires: Date.now() + 120_000,
+		});
+
+		const result = await tool.execute({ query: "oauth query" }, createToolContext());
+
+		expect(result).toContain("Fallback endpoint response");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		const [firstUrl] = fetchMock.mock.calls[0] ?? [];
+		const [secondUrl] = fetchMock.mock.calls[1] ?? [];
+		expect(typeof firstUrl === "string" ? firstUrl : "").toContain("daily-cloudcode-pa");
+		expect(typeof secondUrl === "string" ? secondUrl : "").toContain("autopush-cloudcode-pa");
+	});
+
+	it("tries the next Code Assist generate endpoint after fetch failure", async () => {
+		fetchMock.mockRejectedValueOnce(new Error("daily unavailable")).mockResolvedValueOnce(
+			createFetchResponse({
+				response: createResponse({
+					content: { role: "model", parts: [{ text: "Network fallback response" }] },
+				}),
+			})
+		);
+
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await invokeAuthLoader(hooks, "google", {
+			type: "oauth",
+			access: "test-access-token",
+			refresh: "refresh-token-network-fallback|project-id|managed-project",
+			expires: Date.now() + 120_000,
+		});
+
+		const result = await tool.execute({ query: "oauth query" }, createToolContext());
+
+		expect(result).toContain("Network fallback response");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("parses Code Assist array responses beyond the first item", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse([
+				{ metadata: {} },
+				{
+					response: createResponse({
+						content: { role: "model", parts: [{ text: "Array response" }] },
+					}),
+				},
+			])
+		);
+
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await invokeAuthLoader(hooks, "google", {
+			type: "oauth",
+			access: "test-access-token",
+			refresh: "refresh-token-array|project-id|managed-project",
+			expires: Date.now() + 120_000,
+		});
+
+		const result = await tool.execute({ query: "oauth query" }, createToolContext());
+
+		expect(result).toContain("Array response");
+	});
+
+	it("keys loaded Google projects by refresh token and project", async () => {
+		fetchMock
+			.mockResolvedValueOnce(createFetchResponse({ cloudaicompanionProject: "managed-a" }))
+			.mockResolvedValueOnce(
+				createFetchResponse({
+					response: createResponse({
+						content: { role: "model", parts: [{ text: "Project A" }] },
+					}),
+				})
+			)
+			.mockResolvedValueOnce(createFetchResponse({ cloudaicompanionProject: "managed-b" }))
+			.mockResolvedValueOnce(
+				createFetchResponse({
+					response: createResponse({
+						content: { role: "model", parts: [{ text: "Project B" }] },
+					}),
+				})
+			);
+
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await invokeAuthLoader(hooks, "google", {
+			type: "oauth",
+			access: "test-access-token",
+			refresh: "shared-refresh-token|project-a|",
+			expires: Date.now() + 120_000,
+		});
+		const first = await tool.execute({ query: "oauth query" }, createToolContext());
+
+		await invokeAuthLoader(hooks, "google", {
+			type: "oauth",
+			access: "test-access-token",
+			refresh: "shared-refresh-token|project-b|",
+			expires: Date.now() + 120_000,
+		});
+		const second = await tool.execute({ query: "oauth query" }, createToolContext());
+
+		expect(first).toContain("Project A");
+		expect(second).toContain("Project B");
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		const firstGenerateBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+		const secondGenerateBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body)) as Record<string, unknown>;
+		expect(firstGenerateBody.project).toBe("managed-a");
+		expect(secondGenerateBody.project).toBe("managed-b");
+	});
+
 	it("refreshes expired OAuth access token and uses it", async () => {
 		fetchMock
 			.mockResolvedValueOnce(createFetchResponse({ access_token: "new-access", expires_in: 3600 }))
