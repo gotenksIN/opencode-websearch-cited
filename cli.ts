@@ -75,22 +75,91 @@ async function readTextFileOrThrow(filepath: string): Promise<string> {
 	return file.text();
 }
 
-function stripJsoncComments(text: string): string {
-	const lines = text.split("\n");
-	const kept: string[] = [];
-	for (const line of lines) {
-		const trimmed = line.trimStart();
-		if (trimmed.startsWith("//")) {
+function cleanJsonc(text: string): string {
+	let result = "";
+	let inString = false;
+	let escaped = false;
+	let index = 0;
+
+	while (index < text.length) {
+		const current = text[index] ?? "";
+		const next = text[index + 1] ?? "";
+
+		if (inString) {
+			result += current;
+			if (escaped) {
+				escaped = false;
+			} else if (current === "\\") {
+				escaped = true;
+			} else if (current === '"') {
+				inString = false;
+			}
+			index += 1;
 			continue;
 		}
-		kept.push(line);
+
+		if (current === '"') {
+			inString = true;
+			result += current;
+			index += 1;
+			continue;
+		}
+
+		if (current === ",") {
+			let nextIndex = index + 1;
+			while (nextIndex < text.length) {
+				while (/\s/.test(text[nextIndex] ?? "")) {
+					nextIndex += 1;
+				}
+				if (text[nextIndex] === "/" && text[nextIndex + 1] === "/") {
+					while (nextIndex < text.length && text[nextIndex] !== "\n") {
+						nextIndex += 1;
+					}
+					continue;
+				}
+				if (text[nextIndex] === "/" && text[nextIndex + 1] === "*") {
+					nextIndex += 2;
+					while (nextIndex < text.length && !(text[nextIndex] === "*" && text[nextIndex + 1] === "/")) {
+						nextIndex += 1;
+					}
+					nextIndex += 2;
+					continue;
+				}
+				break;
+			}
+			const next = text[nextIndex] ?? "";
+			if (next === "}" || next === "]") {
+				index += 1;
+				continue;
+			}
+		}
+
+		if (current === "/" && next === "/") {
+			while (index < text.length && text[index] !== "\n") {
+				index += 1;
+			}
+			continue;
+		}
+
+		if (current === "/" && next === "*") {
+			index += 2;
+			while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) {
+				index += 1;
+			}
+			index += 2;
+			continue;
+		}
+
+		result += current;
+		index += 1;
 	}
-	return kept.join("\n");
+
+	return result;
 }
 
 async function loadConfig(filepath: string): Promise<unknown> {
 	const raw = await readTextFileOrThrow(filepath);
-	const cleaned = stripJsoncComments(raw);
+	const cleaned = cleanJsonc(raw);
 	const parsed: unknown = JSON.parse(cleaned);
 	return parsed;
 }
@@ -111,7 +180,7 @@ function parseProviderAuth(entry: unknown, providerID: string): ProviderAuth {
 		const access = typeof entry.access === "string" ? entry.access : "";
 		const refresh = typeof entry.refresh === "string" ? entry.refresh : "";
 		const expires = typeof entry.expires === "number" ? entry.expires : Number.NaN;
-		if (!access || !refresh || !Number.isFinite(expires)) {
+		if (!refresh) {
 			throw new Error(`Invalid OAuth auth values for provider "${providerID}"`);
 		}
 		return {
