@@ -39,6 +39,11 @@ type OpenRouterResponsesBody = {
 	output?: OpenRouterResponsesMessage[];
 };
 
+type Source = {
+	title?: string;
+	url: string;
+};
+
 const OPENROUTER_RESPONSES_ENDPOINT = "https://openrouter.ai/api/v1/responses";
 
 function buildWebSearchUserPrompt(query: string): string {
@@ -56,6 +61,35 @@ function getApiKey(auth: ProviderAuth): string {
 		throw new Error("Missing OpenRouter API key");
 	}
 	return key;
+}
+
+function addSource(sources: Source[], value: unknown): void {
+	if (!value || typeof value !== "object") {
+		return;
+	}
+
+	const record = value as { title?: unknown; url?: unknown };
+	if (typeof record.url !== "string" || record.url.trim() === "") {
+		return;
+	}
+
+	if (sources.some((source) => source.url === record.url)) {
+		return;
+	}
+
+	sources.push({
+		title: typeof record.title === "string" && record.title.trim() !== "" ? record.title.trim() : undefined,
+		url: record.url.trim(),
+	});
+}
+
+function appendSources(text: string, sources: Source[]): string {
+	if (sources.length === 0 || /(^|\n)Sources:/i.test(text)) {
+		return text;
+	}
+
+	const lines = sources.map((source, index) => `[${index + 1}] ${source.title ?? "Untitled"} (${source.url})`);
+	return `${text}\n\nSources:\n${lines.join("\n")}`;
 }
 
 function extractOutputText(payload: unknown): string | undefined {
@@ -76,6 +110,7 @@ function extractOutputText(payload: unknown): string | undefined {
 	}
 
 	let combined = "";
+	const sources: Source[] = [];
 
 	for (const item of output) {
 		if (item.type !== "message") {
@@ -96,10 +131,16 @@ function extractOutputText(payload: unknown): string | undefined {
 			if (typeof text === "string") {
 				combined += text;
 			}
+
+			if (Array.isArray(part.annotations)) {
+				for (const annotation of part.annotations) {
+					addSource(sources, annotation);
+				}
+			}
 		}
 	}
 
-	return combined || undefined;
+	return combined ? appendSources(combined, sources) : undefined;
 }
 
 async function runOpenRouterWebSearch(options: {

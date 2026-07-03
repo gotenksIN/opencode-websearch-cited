@@ -1004,6 +1004,78 @@ describe("WebsearchCitedPlugin", () => {
 		expect(headers.Authorization).toBe("Bearer test-api-key");
 	});
 
+	it("passes configured OpenAI store option", async () => {
+		fetchMock.mockResolvedValueOnce(createFetchResponse(createOpenAIResponseBody("Stored response")));
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				openai: {
+					options: {
+						store: true,
+						websearch_cited: { model: "gpt-4o-search-preview" },
+					},
+				},
+			},
+		} as Config);
+
+		await invokeAuthLoader(hooks, "openai", {
+			type: "api",
+			key: "test-api-key",
+		});
+
+		await tool.execute({ query: "openai web search" }, createToolContext());
+
+		const [, init] = fetchMock.mock.calls[0] ?? [];
+		const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+		expect(body.store).toBe(true);
+	});
+
+	it("adds OpenAI sources from response metadata", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse({
+				output: [
+					{
+						type: "web_search_call",
+						action: {
+							sources: [{ title: "Search Source", url: "https://example.test/search" }],
+						},
+					},
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "output_text",
+								text: "OpenAI answer",
+								annotations: [{ title: "Annotation Source", url: "https://example.test/annotation" }],
+							},
+						],
+					},
+				],
+			})
+		);
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				openai: {
+					options: {
+						websearch_cited: { model: "gpt-4o-search-preview" },
+					},
+				},
+			},
+		} as Config);
+
+		await invokeAuthLoader(hooks, "openai", {
+			type: "api",
+			key: "test-api-key",
+		});
+
+		const result = await tool.execute({ query: "openai web search" }, createToolContext());
+
+		expect(result).toBe(
+			"OpenAI answer\n\nSources:\n[1] Search Source (https://example.test/search)\n[2] Annotation Source (https://example.test/annotation)"
+		);
+	});
+
 	it("uses the OpenRouter responses endpoint when configured and auth is present", async () => {
 		fetchMock.mockResolvedValueOnce(createFetchResponse(createOpenRouterResponseBody("Search result body")));
 
@@ -1053,6 +1125,45 @@ describe("WebsearchCitedPlugin", () => {
 		expect(typeof searchPromptValue === "string" ? searchPromptValue : "").toContain(
 			'perform web search on "openrouter web search"'
 		);
+	});
+
+	it("adds OpenRouter sources from annotations", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse({
+				output: [
+					{
+						type: "message",
+						role: "assistant",
+						content: [
+							{
+								type: "output_text",
+								text: "OpenRouter answer",
+								annotations: [{ title: "OpenRouter Source", url: "https://example.test/openrouter" }],
+							},
+						],
+					},
+				],
+			})
+		);
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				openrouter: {
+					options: {
+						websearch_cited: { model: "openrouter/auto" },
+					},
+				},
+			},
+		} as Config);
+
+		await invokeAuthLoader(hooks, "openrouter", {
+			type: "api",
+			key: "test-openrouter-key",
+		});
+
+		const result = await tool.execute({ query: "openrouter web search" }, createToolContext());
+
+		expect(result).toBe("OpenRouter answer\n\nSources:\n[1] OpenRouter Source (https://example.test/openrouter)");
 	});
 
 	it("selects the first configured provider in order", async () => {

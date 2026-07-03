@@ -39,6 +39,11 @@ type OpenAIResponsesRequest = {
 	parallel_tool_calls?: boolean;
 };
 
+type Source = {
+	title?: string;
+	url: string;
+};
+
 function buildWebSearchUserPrompt(query: string): string {
 	const normalized = query.trim();
 	return `perform web search on "${normalized}". Return results with inline citations (**only** source index like [1], no URL in the answer) and end with a Sources list of URLs.`;
@@ -167,7 +172,7 @@ async function runOpenAIWebSearch(options: OpenAIWebSearchOptions): Promise<stri
 			summary: options.reasoningSummary,
 		};
 	}
-	body.store = false;
+	body.store = options.store ?? false;
 
 	if (options.textVerbosity) {
 		body.text = {
@@ -276,10 +281,21 @@ function extractOpenAIText(payload: unknown): string | undefined {
 	}
 
 	let combined = "";
+	const sources: Source[] = [];
 
 	for (const item of output) {
 		if (!item || typeof item !== "object") {
 			continue;
+		}
+
+		const action = (item as { action?: unknown }).action;
+		if (action && typeof action === "object") {
+			const actionSources = (action as { sources?: unknown }).sources;
+			if (Array.isArray(actionSources)) {
+				for (const source of actionSources) {
+					addSource(sources, source);
+				}
+			}
 		}
 
 		const content = (item as { content?: unknown }).content;
@@ -306,10 +322,46 @@ function extractOpenAIText(payload: unknown): string | undefined {
 					combined += obj.value;
 				}
 			}
+
+			const annotations = (part as { annotations?: unknown }).annotations;
+			if (Array.isArray(annotations)) {
+				for (const annotation of annotations) {
+					addSource(sources, annotation);
+				}
+			}
 		}
 	}
 
-	return combined || undefined;
+	return combined ? appendSources(combined, sources) : undefined;
+}
+
+function addSource(sources: Source[], value: unknown): void {
+	if (!value || typeof value !== "object") {
+		return;
+	}
+
+	const record = value as { title?: unknown; url?: unknown };
+	if (typeof record.url !== "string" || record.url.trim() === "") {
+		return;
+	}
+
+	if (sources.some((source) => source.url === record.url)) {
+		return;
+	}
+
+	sources.push({
+		title: typeof record.title === "string" && record.title.trim() !== "" ? record.title.trim() : undefined,
+		url: record.url.trim(),
+	});
+}
+
+function appendSources(text: string, sources: Source[]): string {
+	if (sources.length === 0 || /(^|\n)Sources:/i.test(text)) {
+		return text;
+	}
+
+	const lines = sources.map((source, index) => `[${index + 1}] ${source.title ?? "Untitled"} (${source.url})`);
+	return `${text}\n\nSources:\n${lines.join("\n")}`;
 }
 
 async function buildErrorDetails(response: Response, url: string, body: OpenAIResponsesRequest): Promise<string> {
