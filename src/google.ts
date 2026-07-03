@@ -11,6 +11,7 @@ type GeminiChunk = {
 };
 
 type GeminiSupportSegment = {
+	partIndex?: number;
 	startIndex?: number;
 	endIndex?: number;
 };
@@ -47,6 +48,11 @@ type GeminiGenerateContentResponse = {
 type CitationInsertion = {
 	index: number;
 	marker: string;
+};
+
+type ResponseText = {
+	text: string;
+	partStartByteByIndex: Map<number, number>;
 };
 
 type GeminiWebSearchOptions = {
@@ -160,83 +166,147 @@ async function runGeminiWebSearch(options: GeminiWebSearchOptions): Promise<Gemi
 }
 
 export function formatWebSearchResponse(response: GeminiGenerateContentResponse, query: string): string {
-	const responseText = extractResponseText(response);
+	const extracted = extractResponseText(response);
 
-	if (!responseText?.trim()) {
+	if (!extracted?.text.trim()) {
 		return `No search results or information found for query: "${query}"`;
 	}
+	const responseText = extracted.text;
 
 	const metadata = extractGroundingMetadata(response);
-	const sources = metadata?.groundingChunks;
-	const hasSources = Boolean(sources && sources.length > 0);
+	const sources = metadata?.groundingChunks ?? [];
+	const referenced = new Set<number>();
+	for (const support of metadata?.groundingSupports ?? []) {
+		for (const index of support.groundingChunkIndices ?? []) {
+			if (Number.isInteger(index) && index >= 0) {
+				referenced.add(index);
+			}
+		}
+	}
+
+	const displayBySourceIndex = new Map<number, number>();
+	const sourceLines: string[] = [];
+	for (const [index, source] of sources.entries()) {
+		if (referenced.size > 0 && !referenced.has(index)) {
+			continue;
+		}
+
+		const uri = source.web?.uri?.trim();
+		if (!uri) {
+			continue;
+		}
+
+		const displayIndex = sourceLines.length + 1;
+		displayBySourceIndex.set(index, displayIndex);
+		sourceLines.push(`[${displayIndex}] ${source.web?.title?.trim() || "Untitled"} (${uri})`);
+	}
 
 	let modifiedText = responseText;
 
-	if (hasSources && metadata) {
-		const insertions = buildCitationInsertions(metadata);
+	if (sourceLines.length > 0 && metadata) {
+		const insertions = buildCitationInsertions(metadata, extracted.partStartByteByIndex, displayBySourceIndex);
 		if (insertions.length > 0) {
 			modifiedText = insertMarkersByUtf8Index(modifiedText, insertions);
 		}
 	}
 
-	if (hasSources && sources) {
-		const sourceLines = sources.map((source, index) => {
-			const title = source.web?.title || "Untitled";
-			const uri = source.web?.uri || "No URI";
-			return `[${index + 1}] ${title} (${uri})`;
-		});
+	if (sourceLines.length > 0) {
 		modifiedText += `\n\nSources:\n${sourceLines.join("\n")}`;
 	}
 
 	return modifiedText;
 }
 
-function extractResponseText(response: GeminiGenerateContentResponse): string | undefined {
+function extractResponseText(response: GeminiGenerateContentResponse): ResponseText | undefined {
 	const parts = response.candidates?.[0]?.content?.parts;
 	if (!parts || parts.length === 0) {
 		return undefined;
 	}
 
+	const encoder = new TextEncoder();
 	let combined = "";
-	for (const part of parts) {
+	let byteLength = 0;
+	const partStartByteByIndex = new Map<number, number>();
+
+	for (const [index, part] of parts.entries()) {
 		if (part.thought) {
 			continue;
 		}
 		if (typeof part.text === "string") {
+			partStartByteByIndex.set(index, byteLength);
 			combined += part.text;
+			byteLength += encoder.encode(part.text).length;
 		}
 	}
 
-	return combined || undefined;
+	return combined ? { text: combined, partStartByteByIndex } : undefined;
 }
 
 function extractGroundingMetadata(response: GeminiGenerateContentResponse): GeminiMetadata | undefined {
 	return response.candidates?.[0]?.groundingMetadata;
 }
 
-function buildCitationInsertions(metadata?: GeminiMetadata): CitationInsertion[] {
+function buildCitationInsertions(
+	metadata: GeminiMetadata | undefined,
+	partStartByteByIndex: Map<number, number>,
+	displayByOriginalIndex: Map<number, number>
+): CitationInsertion[] {
 	const supports = metadata?.groundingSupports;
 	if (!supports || supports.length === 0) {
 		return [];
 	}
 
-	const insertions: CitationInsertion[] = [];
+	const markersByIndex = new Map<number, Set<number>>();
 
 	for (const support of supports) {
 		const segment = support.segment;
 		const indices = support.groundingChunkIndices;
-		if (!segment || segment.endIndex == null || !indices || indices.length === 0) {
+		const endIndex = segment?.endIndex;
+		if (
+			typeof endIndex !== "number" ||
+			!Number.isInteger(endIndex) ||
+			endIndex < 0 ||
+			!indices ||
+			indices.length === 0
+		) {
 			continue;
 		}
 
-		const uniqueSorted = Array.from(new Set(indices)).sort((a, b) => a - b);
-		const marker = uniqueSorted.map((idx) => `[${idx + 1}]`).join("");
+		const rawPartIndex = segment?.partIndex;
+		const partIndex =
+			typeof rawPartIndex === "number" && Number.isInteger(rawPartIndex) && rawPartIndex >= 0 ? rawPartIndex : 0;
+		const partStartByte = partStartByteByIndex.get(partIndex);
+		if (partStartByte == null) {
+			continue;
+		}
 
-		insertions.push({
-			index: segment.endIndex,
-			marker,
-		});
+		const displayIndices = indices
+			.map((index) => (Number.isInteger(index) && index >= 0 ? displayByOriginalIndex.get(index) : undefined))
+			.filter((index): index is number => index != null);
+
+		if (displayIndices.length === 0) {
+			continue;
+		}
+
+		const insertionIndex = partStartByte + endIndex;
+		let markerSet = markersByIndex.get(insertionIndex);
+		if (!markerSet) {
+			markerSet = new Set<number>();
+			markersByIndex.set(insertionIndex, markerSet);
+		}
+
+		for (const displayIndex of displayIndices) {
+			markerSet.add(displayIndex);
+		}
 	}
+
+	const insertions = Array.from(markersByIndex.entries()).map(([index, markerSet]) => {
+		const marker = Array.from(markerSet)
+			.sort((a, b) => a - b)
+			.map((idx) => `[${idx}]`)
+			.join("");
+		return { index, marker };
+	});
 
 	insertions.sort((a, b) => b.index - a.index);
 	return insertions;
@@ -247,29 +317,40 @@ function insertMarkersByUtf8Index(text: string, insertions: CitationInsertion[])
 		return text;
 	}
 
+	let result = text;
+	const validInsertions = insertions
+		.map((insertion) => {
+			const stringIndex = utf8ByteIndexToStringIndex(text, insertion.index);
+			return stringIndex == null ? undefined : { index: stringIndex, marker: insertion.marker };
+		})
+		.filter((insertion): insertion is CitationInsertion => insertion != null)
+		.sort((a, b) => b.index - a.index);
+
+	for (const insertion of validInsertions) {
+		result = `${result.slice(0, insertion.index)}${insertion.marker}${result.slice(insertion.index)}`;
+	}
+
+	return result;
+}
+
+function utf8ByteIndexToStringIndex(text: string, byteIndex: number): number | undefined {
+	if (!Number.isInteger(byteIndex) || byteIndex < 0) {
+		return undefined;
+	}
+
 	const encoder = new TextEncoder();
-	const responseBytes = encoder.encode(text);
-	const parts: Uint8Array[] = [];
-	let lastIndex = responseBytes.length;
+	let currentByteIndex = 0;
+	let currentStringIndex = 0;
 
-	for (const insertion of insertions) {
-		const position = Math.min(insertion.index, lastIndex);
-		parts.unshift(responseBytes.subarray(position, lastIndex));
-		parts.unshift(encoder.encode(insertion.marker));
-		lastIndex = position;
+	for (const char of text) {
+		if (currentByteIndex === byteIndex) {
+			return currentStringIndex;
+		}
+		currentByteIndex += encoder.encode(char).length;
+		currentStringIndex += char.length;
 	}
 
-	parts.unshift(responseBytes.subarray(0, lastIndex));
-
-	const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
-	const finalBytes = new Uint8Array(totalLength);
-	let offset = 0;
-	for (const part of parts) {
-		finalBytes.set(part, offset);
-		offset += part.length;
-	}
-
-	return new TextDecoder().decode(finalBytes);
+	return currentByteIndex === byteIndex ? currentStringIndex : undefined;
 }
 
 class GeminiApiKeyClient implements WebSearchClient {

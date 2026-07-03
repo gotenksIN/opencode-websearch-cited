@@ -124,6 +124,113 @@ describe("formatWebSearchResponse", () => {
 			"こんにちは![1] Web Search✨️[2][3]\n\nSources:\n[1] Japanese Greeting (https://example.test/japanese-greeting)\n[2] Example Repo (https://example.test/repo)\n[3] Example Article (https://example.test/article)"
 		);
 	});
+
+	it("uses partIndex when inserting citations into multi-part responses", () => {
+		const response = createResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "Alpha. " }, { text: "Beta." }],
+			},
+			groundingMetadata: {
+				groundingChunks: [{ web: { title: "Beta Source", uri: "https://example.test/beta" } }],
+				groundingSupports: [
+					{
+						segment: { partIndex: 1, startIndex: 0, endIndex: 5 },
+						groundingChunkIndices: [0],
+					},
+				],
+			},
+		});
+
+		const result = formatWebSearchResponse(response, "multipart query");
+
+		expect(result).toBe("Alpha. Beta.[1]\n\nSources:\n[1] Beta Source (https://example.test/beta)");
+	});
+
+	it("ignores citation indices without matching sources", () => {
+		const response = createResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "Fact." }],
+			},
+			groundingMetadata: {
+				groundingChunks: [{ web: { title: "Used", uri: "https://example.test/used" } }],
+				groundingSupports: [
+					{
+						segment: { endIndex: 5 },
+						groundingChunkIndices: [0, 2],
+					},
+				],
+			},
+		});
+
+		const result = formatWebSearchResponse(response, "invalid citation query");
+
+		expect(result).toBe("Fact.[1]\n\nSources:\n[1] Used (https://example.test/used)");
+	});
+
+	it("coalesces citations inserted at the same byte index", () => {
+		const response = createResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "Fact." }],
+			},
+			groundingMetadata: {
+				groundingChunks: [
+					{ web: { title: "First", uri: "https://example.test/first" } },
+					{ web: { title: "Second", uri: "https://example.test/second" } },
+				],
+				groundingSupports: [
+					{ segment: { endIndex: 5 }, groundingChunkIndices: [0] },
+					{ segment: { endIndex: 5 }, groundingChunkIndices: [1] },
+				],
+			},
+		});
+
+		const result = formatWebSearchResponse(response, "same index query");
+
+		expect(result).toBe(
+			"Fact.[1][2]\n\nSources:\n[1] First (https://example.test/first)\n[2] Second (https://example.test/second)"
+		);
+	});
+
+	it("does not corrupt text when citation byte indices are invalid", () => {
+		const response = createResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "éclair" }],
+			},
+			groundingMetadata: {
+				groundingChunks: [{ web: { title: "Accent", uri: "https://example.test/accent" } }],
+				groundingSupports: [{ segment: { endIndex: 1 }, groundingChunkIndices: [0] }],
+			},
+		});
+
+		const result = formatWebSearchResponse(response, "invalid byte query");
+
+		expect(result).toBe("éclair\n\nSources:\n[1] Accent (https://example.test/accent)");
+	});
+
+	it("omits unreferenced and invalid sources", () => {
+		const response = createResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "Fact." }],
+			},
+			groundingMetadata: {
+				groundingChunks: [
+					{ web: { title: "Used", uri: "https://example.test/used" } },
+					{ web: { title: "Unused", uri: "https://example.test/unused" } },
+					{ web: { title: "Missing URI" } },
+				],
+				groundingSupports: [{ segment: { endIndex: 5 }, groundingChunkIndices: [0, 2] }],
+			},
+		});
+
+		const result = formatWebSearchResponse(response, "source filter query");
+
+		expect(result).toBe("Fact.[1]\n\nSources:\n[1] Used (https://example.test/used)");
+	});
 });
 
 describe("WebsearchCitedPlugin", () => {
