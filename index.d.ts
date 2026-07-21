@@ -1,9 +1,5 @@
-import type { Plugin } from '@opencode-ai/plugin';
+import type { Plugin } from "@opencode-ai/plugin/v2";
 
-declare const WebsearchCitedPlugin: Plugin;
+declare const WebsearchCitedPlugin: Plugin.Plugin;
 
-declare const WebsearchCitedGooglePlugin: Plugin;
-declare const WebsearchCitedOpenAIPlugin: Plugin;
-
-export { WebsearchCitedGooglePlugin, WebsearchCitedOpenAIPlugin };
 export default WebsearchCitedPlugin;

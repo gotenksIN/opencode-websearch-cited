@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { Plugin, PluginInput } from "@opencode-ai/plugin";
-import type { Config, Provider, Auth as ProviderAuth } from "@opencode-ai/sdk";
+import type { Plugin } from "@opencode-ai/plugin/v2";
 
 import { formatWebSearchResponse } from "./src/google.ts";
+import type { ProviderAuth } from "./src/types.ts";
+
+type ProviderConfig = {
+	options?: Record<string, unknown>;
+	models?: Record<string, { options?: Record<string, unknown> }>;
+};
+
+type Config = {
+	provider?: Record<string, ProviderConfig>;
+};
+
+type TestAuth = { type: "key"; key: string } | { type: "oauth"; access: string; refresh: string; expires?: number };
 
 const WEBSEARCH_CONFIG: Config = {
 	provider: {
@@ -254,6 +265,16 @@ describe("WebsearchCitedPlugin", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("accepts V2 plugin options", async () => {
+		const { tool } = await createEnv(undefined, { provider: "google", model: "gemini-2.5-flash" });
+
+		await expectThrowMessage(
+			() => tool.execute({ query: "opencode" }, createToolContext()),
+			'Missing auth for provider "google"'
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("returns invalid model when websearch model is not configured", async () => {
 		const { tool } = await createEnv();
 		const context = createToolContext();
@@ -353,7 +374,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		const result = await tool.execute({ query: "sample" }, context);
@@ -368,7 +389,7 @@ describe("WebsearchCitedPlugin", () => {
 		fetchMock.mockRejectedValueOnce(failure);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		try {
@@ -392,7 +413,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		await tool.execute({ query: "stored key query" }, context);
@@ -402,11 +423,41 @@ describe("WebsearchCitedPlugin", () => {
 		expect(headers["x-goog-api-key"]).toBe("stored-key");
 	});
 
+	it("falls back to the provider apiKey setting", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse(
+				createResponse({
+					content: {
+						role: "model",
+						parts: [{ text: "Configured key response" }],
+					},
+				})
+			)
+		);
+
+		const { tool } = await createEnv({
+			provider: {
+				google: {
+					options: {
+						apiKey: "configured-key",
+						websearch_cited: { model: "gemini-2.5-flash" },
+					},
+				},
+			},
+		});
+
+		await tool.execute({ query: "configured key query" }, createToolContext());
+
+		const [, init] = fetchMock.mock.calls[0] ?? [];
+		const headers = (init?.headers ?? {}) as Record<string, string>;
+		expect(headers["x-goog-api-key"]).toBe("configured-key");
+	});
+
 	it("throws Google API error envelopes from successful responses", async () => {
 		fetchMock.mockResolvedValueOnce(createFetchResponse({ error: { message: "quota exceeded" } }));
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 
 		await expectThrowMessage(() => tool.execute({ query: "stored key query" }, createToolContext()), "quota exceeded");
 	});
@@ -432,7 +483,7 @@ describe("WebsearchCitedPlugin", () => {
 				},
 			},
 		} as Config);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		await tool.execute({ query: "model query" }, context);
@@ -463,7 +514,7 @@ describe("WebsearchCitedPlugin", () => {
 				},
 			},
 		} as Config);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		await tool.execute({ query: "model query" }, context);
@@ -494,7 +545,7 @@ describe("WebsearchCitedPlugin", () => {
 				},
 			},
 		} as unknown as Config);
-		await invokeAuthLoader(hooks, "google", { type: "api", key: "stored-key" });
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
 		const context = createToolContext();
 
 		await tool.execute({ query: "model query" }, context);
@@ -516,7 +567,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "test-refresh|user-project|managed-project",
@@ -559,7 +610,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-project|user-project|managed-project",
@@ -588,7 +639,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-managed||managed-project",
@@ -619,7 +670,7 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-load",
@@ -660,7 +711,7 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-generate-fallback|project-id|managed-project",
@@ -687,7 +738,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-network-fallback|project-id|managed-project",
@@ -713,7 +764,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "refresh-token-array|project-id|managed-project",
@@ -745,7 +796,7 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "shared-refresh-token|project-a|",
@@ -753,7 +804,7 @@ describe("WebsearchCitedPlugin", () => {
 		});
 		const first = await tool.execute({ query: "oauth query" }, createToolContext());
 
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "shared-refresh-token|project-b|",
@@ -783,7 +834,7 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "stale-access",
 			refresh: "refresh-token-expired|project-id|",
@@ -826,11 +877,11 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "stale-access",
 			refresh: "refresh-token-retry|project-id|",
-		} as ProviderAuth);
+		} as TestAuth);
 
 		const context = createToolContext();
 
@@ -858,7 +909,7 @@ describe("WebsearchCitedPlugin", () => {
 		);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "",
 			refresh: "refresh-token-fail|project-id|",
@@ -894,7 +945,7 @@ describe("WebsearchCitedPlugin", () => {
 			);
 
 		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
-		await invokeAuthLoader(hooks, "google", {
+		await setCredential(hooks, "google", {
 			type: "oauth",
 			access: "expired-access",
 			refresh: "refresh-token-cache|project-id|",
@@ -963,7 +1014,7 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openai", {
+		await setCredential(hooks, "openai", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "test-refresh-token",
@@ -995,8 +1046,8 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openai", {
-			type: "api",
+		await setCredential(hooks, "openai", {
+			type: "key",
 			key: "test-api-key",
 		});
 
@@ -1026,8 +1077,8 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openai", {
-			type: "api",
+		await setCredential(hooks, "openai", {
+			type: "key",
 			key: "test-api-key",
 		});
 
@@ -1072,8 +1123,8 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openai", {
-			type: "api",
+		await setCredential(hooks, "openai", {
+			type: "key",
 			key: "test-api-key",
 		});
 
@@ -1097,8 +1148,8 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openrouter", {
-			type: "api",
+		await setCredential(hooks, "openrouter", {
+			type: "key",
 			key: "test-openrouter-key",
 		});
 
@@ -1164,8 +1215,8 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openrouter", {
-			type: "api",
+		await setCredential(hooks, "openrouter", {
+			type: "key",
 			key: "test-openrouter-key",
 		});
 
@@ -1192,7 +1243,7 @@ describe("WebsearchCitedPlugin", () => {
 			},
 		} as Config);
 
-		await invokeAuthLoader(hooks, "openai", {
+		await setCredential(hooks, "openai", {
 			type: "oauth",
 			access: "test-access-token",
 			refresh: "test-refresh-token",
@@ -1209,29 +1260,17 @@ describe("WebsearchCitedPlugin", () => {
 		expect(typeof url === "string" ? url : "").toContain("/codex/responses");
 	});
 
-	it("index exports are valid plugin init functions", async () => {
+	it("exports one V2 plugin definition", async () => {
 		const mod = await importIndexModule();
-		const entries = Object.entries(mod);
-		expect(entries.length).toBeGreaterThan(0);
-		for (const [name, value] of entries) {
-			expect(name.trim()).not.toBe("");
-			expect(typeof value).toBe("function");
-		}
+		expect(Object.keys(mod)).toEqual(["default"]);
+		expect(mod.default?.id).toBe("opencode.websearch-cited");
+		expect(typeof mod.default?.setup).toBe("function");
 	});
 
-	it("initializes all exports like opencode", async () => {
-		const mod = await importIndexModule();
-		const input = createPluginInput();
-		const hooks: unknown[] = [];
-		for (const [name, value] of Object.entries(mod)) {
-			if (typeof value !== "function") {
-				throw new Error(`Invalid plugin export "${name}"`);
-			}
-			hooks.push(await (value as Plugin)(input));
-		}
-		for (const hook of hooks) {
-			expect(hook && typeof hook === "object").toBe(true);
-		}
+	it("registers websearch_cited exactly once", async () => {
+		const { codemode, registrations } = await createEnv(WEBSEARCH_CONFIG);
+		expect(registrations).toEqual(["websearch_cited"]);
+		expect(codemode).toBe(false);
 	});
 });
 
@@ -1247,114 +1286,153 @@ async function expectThrowMessage(fn: () => Promise<unknown>, match: string) {
 	}
 }
 
-type Hooks = Awaited<ReturnType<Plugin>>;
+type Hooks = {
+	auth: Map<string, ProviderAuth>;
+};
 
 type Tool = {
 	execute: (args: unknown, context: unknown) => Promise<string>;
 };
 
-function isTool(value: unknown): value is Tool {
-	if (!value || typeof value !== "object") {
-		return false;
-	}
-	const execute = (value as Record<string, unknown>).execute;
-	return typeof execute === "function";
-}
+type RegisteredTool = {
+	name: string;
+	options?: { codemode?: boolean };
+	execute: (
+		input: unknown,
+		context: unknown
+	) => Promise<{ content: ReadonlyArray<{ type: "text"; text: string } | { type: "file" }> }>;
+};
 
-function createPluginInput(): PluginInput {
-	return {} as PluginInput;
-}
-
-async function importIndexModule(): Promise<Record<string, unknown>> {
+async function importIndexModule(): Promise<{ default?: Plugin.Plugin }> {
 	importCounter += 1;
 	const mod = (await import(`./index?agent_test=${importCounter}`)) as unknown;
 	if (!mod || typeof mod !== "object") {
 		throw new Error("Invalid plugin module");
 	}
-	return mod as Record<string, unknown>;
+	return mod as { default?: Plugin.Plugin };
 }
 
-async function createEnv(config?: Config): Promise<{ hooks: Hooks[]; tool: Tool }> {
+async function createEnv(
+	config?: Config,
+	pluginOptions = selectPluginOptions(config)
+): Promise<{ hooks: Hooks[]; tool: Tool; registrations: string[]; codemode: boolean | undefined }> {
 	const mod = await importIndexModule();
-	const input = createPluginInput();
-	const hooks: Hooks[] = [];
-
-	for (const [name, value] of Object.entries(mod)) {
-		if (typeof value !== "function") {
-			throw new Error(`Invalid plugin export "${name}"`);
-		}
-		hooks.push(await (value as Plugin)(input));
+	const plugin = mod.default;
+	if (!plugin) {
+		throw new Error("Missing default plugin export");
 	}
 
-	if (config) {
-		for (const hook of hooks) {
-			const configHook = (hook as Record<string, unknown>).config;
-			if (typeof configHook === "function") {
-				await (configHook as (c: Config) => Promise<unknown>)(config);
-			}
-		}
-	}
+	const auth = new Map<string, ProviderAuth>();
+	const hooks = [{ auth }];
+	const registered: RegisteredTool[] = [];
+	const context = {
+		options: pluginOptions,
+		catalog: {
+			transform: async (transform: (draft: unknown) => void) => {
+				transform(createCatalogDraft(config));
+				return { dispose: async () => {} };
+			},
+		},
+		integration: {
+			connection: {
+				active: async (providerID: string) =>
+					auth.has(providerID) ? { type: "env" as const, name: providerID } : undefined,
+				resolve: async (connection: { type: string; name?: string }) =>
+					connection.name ? auth.get(connection.name) : undefined,
+			},
+		},
+		tool: {
+			transform: async (transform: (draft: { add: (tool: RegisteredTool) => void }) => void) => {
+				transform({ add: (tool) => registered.push(tool) });
+				return { dispose: async () => {} };
+			},
+		},
+	} as unknown as Plugin.Context;
 
-	const tool = findTool(hooks, "websearch_cited");
-	if (!tool) {
+	await plugin.setup(context);
+	const selected = registered.filter((candidate) => candidate.name === "websearch_cited");
+	if (selected.length !== 1) {
 		throw new Error('Tool "websearch_cited" not registered');
 	}
+	const registeredTool = selected[0];
+	if (!registeredTool) {
+		throw new Error('Tool "websearch_cited" not registered');
+	}
+	const tool: Tool = {
+		async execute(args, toolContext) {
+			const output = await registeredTool.execute(args, toolContext);
+			const text = output.content.find((item) => item.type === "text");
+			if (text?.type !== "text") {
+				throw new Error("Tool returned no text content");
+			}
+			return text.text;
+		},
+	};
 
-	return { hooks, tool };
+	return {
+		hooks,
+		tool,
+		registrations: registered.map((candidate) => candidate.name),
+		codemode: registeredTool.options?.codemode,
+	};
 }
 
-function findAuthHook(hooks: Hooks[], providerID: string): Hooks | undefined {
-	for (const hook of hooks) {
-		const auth = (hook as Record<string, unknown>).auth;
-		if (!auth || typeof auth !== "object") {
+function selectPluginOptions(config?: Config): Record<string, unknown> {
+	let firstInvalid: { provider: string; model: unknown } | undefined;
+	for (const [provider, providerConfig] of Object.entries(config?.provider ?? {})) {
+		const cited = providerConfig.options?.websearch_cited;
+		if (!cited || typeof cited !== "object" || Array.isArray(cited)) {
 			continue;
 		}
-		if ((auth as Record<string, unknown>).provider === providerID) {
-			return hook;
+		const model = (cited as Record<string, unknown>).model;
+		if (typeof model === "string" && model.trim() !== "") {
+			return { provider, model };
 		}
+		firstInvalid ??= { provider, model };
 	}
-	return undefined;
+	return firstInvalid ?? {};
 }
 
-async function invokeAuthLoader(hooks: Hooks[], providerID: string, auth: ProviderAuth): Promise<void> {
-	const hook = findAuthHook(hooks, providerID);
-	const authRecord = (hook as Record<string, unknown> | undefined)?.auth;
-	const loader = (authRecord as Record<string, unknown> | undefined)?.loader;
-	if (typeof loader !== "function") {
+function createCatalogDraft(config?: Config): unknown {
+	return {
+		provider: {
+			get(providerID: string) {
+				const provider = config?.provider?.[providerID];
+				if (!provider) {
+					return undefined;
+				}
+				const settings = { ...provider.options };
+				delete settings.websearch_cited;
+				return {
+					provider: { settings },
+					models: new Map(
+						Object.entries(provider.models ?? {}).map(([model, value]) => [model, { settings: value.options }])
+					),
+				};
+			},
+		},
+	};
+}
+
+async function setCredential(hooks: Hooks[], providerID: string, value: TestAuth): Promise<void> {
+	const auth = hooks[0]?.auth;
+	if (!auth) {
+		throw new Error("Missing test auth registry");
+	}
+	if (value.type === "key") {
+		auth.set(providerID, value);
 		return;
 	}
-
-	await (loader as (g: () => Promise<ProviderAuth>, p: Provider) => Promise<unknown>)(
-		() => Promise.resolve(auth),
-		{} as Provider
-	);
-}
-
-function findTool(hooks: Hooks[], name: string): Tool | undefined {
-	let found: unknown;
-	for (const hook of hooks) {
-		const tool = (hook as Record<string, unknown>).tool;
-		if (!tool || typeof tool !== "object") {
-			continue;
-		}
-
-		const candidate = (tool as Record<string, unknown>)[name];
-		if (!candidate) {
-			continue;
-		}
-
-		if (found) {
-			throw new Error(`Tool "${name}" registered multiple times`);
-		}
-
-		found = candidate;
+	if (value.type === "oauth") {
+		auth.set(providerID, {
+			type: "oauth",
+			methodID: "test",
+			access: value.access,
+			refresh: value.refresh,
+			expires: value.expires ?? 0,
+		} as unknown as ProviderAuth);
+		return;
 	}
-
-	if (!isTool(found)) {
-		return undefined;
-	}
-
-	return found;
 }
 
 function createResponse(candidate: CandidateInput): WebSearchGenerateContentResponse {

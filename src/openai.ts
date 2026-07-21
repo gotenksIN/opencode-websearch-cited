@@ -1,6 +1,5 @@
-import type { Auth as ProviderAuth } from "@opencode-ai/sdk";
 import codexPrompt from "./codex_prompt.txt" with { type: "text" };
-import type { GetAuth, WebsearchClient } from "./types.ts";
+import type { GetAuth, ProviderAuth, WebsearchClient } from "./types.ts";
 
 type OpenAIReasoningConfig = {
 	effort?: string;
@@ -78,7 +77,7 @@ function getAccessToken(auth: ProviderAuth): string {
 		return access;
 	}
 
-	if (auth.type === "api") {
+	if (auth.type === "key") {
 		const key = auth.key.trim();
 		if (!key) {
 			throw new Error("Missing OpenAI API key");
@@ -86,16 +85,16 @@ function getAccessToken(auth: ProviderAuth): string {
 		return key;
 	}
 
-	const token = auth.token.trim();
-	if (!token) {
-		throw new Error("Missing OpenAI token");
-	}
-	return token;
+	throw new Error("Unsupported auth type for OpenAI web search");
 }
 
 function extractChatGPTAccountId(auth: ProviderAuth): string | undefined {
 	if (auth.type !== "oauth") {
 		return undefined;
+	}
+	const metadataAccountId = auth.metadata?.accountID;
+	if (typeof metadataAccountId === "string" && metadataAccountId.trim() !== "") {
+		return metadataAccountId.trim();
 	}
 
 	const access = auth.access.trim();

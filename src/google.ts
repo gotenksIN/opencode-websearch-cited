@@ -1,5 +1,4 @@
-import type { Auth as ProviderAuth } from "@opencode-ai/sdk";
-import type { GetAuth, WebsearchClient } from "./types.ts";
+import type { GetAuth, ProviderAuth, WebsearchClient } from "./types.ts";
 
 type GeminiChunkWeb = {
 	title?: string;
@@ -815,7 +814,7 @@ function createWebSearchClientForGoogle(
 	model: string,
 	googleConfig?: GoogleWebsearchConfig
 ): WebSearchClient {
-	if (authDetails.type === "api") {
+	if (authDetails.type === "key") {
 		const apiKey = extractApiKey(authDetails);
 		if (!apiKey) {
 			throw new Error("Missing Google API key");
@@ -837,7 +836,7 @@ function createWebSearchClientForGoogle(
 }
 
 function extractApiKey(authDetails?: ProviderAuth | null): string | undefined {
-	if (authDetails?.type !== "api") {
+	if (authDetails?.type !== "key") {
 		return undefined;
 	}
 	const normalized = authDetails.key.trim();

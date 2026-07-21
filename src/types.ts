@@ -1,4 +1,6 @@
-import type { Auth as ProviderAuth } from "@opencode-ai/sdk";
+import type { CredentialValue } from "@opencode-ai/sdk/v2/types";
+
+export type ProviderAuth = CredentialValue;
 
 export type GetAuth = () => Promise<ProviderAuth | undefined>;
 

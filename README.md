@@ -1,18 +1,12 @@
-LLM-grounded web search plugin for [OpenCode](https://opencode.ai), with inline citations and a `Sources:` list when available.
+LLM-grounded web search plugin for [OpenCode V2](https://v2.opencode.ai), with inline citations and a `Sources:` list when available.
 
-This plugin exposes a web search capability as an OpenCode custom tool, so your agent can call a single tool to perform web search with inline citations.
+The plugin exposes one directly callable tool, `websearch_cited`, backed by the web search APIs from:
 
----
+- [Google](https://ai.google.dev/gemini-api/docs/google-search)
+- [OpenAI](https://platform.openai.com/docs/guides/tools-web-search)
+- [OpenRouter](https://openrouter.ai/docs/guides/features/plugins/web-search)
 
-## Features
-
-- `websearch_cited` tool backed by the builtin web search tool from:
-  - [Google](https://ai.google.dev/gemini-api/docs/google-search)
-  - [OpenAI](https://platform.openai.com/docs/guides/tools-web-search)
-  - [OpenRouter](https://openrouter.ai/docs/guides/features/plugins/web-search)
-- Outputs results with inline citations and a `Sources:` list when available.
-
-Example output (short):
+Example output:
 
 ```markdown
 Answer with citations[1] based on web search results[2].
@@ -22,96 +16,119 @@ Sources:
 [2] Another Source (https://example.test/source-2)
 ```
 
-Full example see [example_output.md](./example_output.md).
+See [example_output.md](./example_output.md) for a complete example.
 
----
+## Compatibility
+
+Version 2.x uses the beta OpenCode V2 plugin API and does not load in OpenCode V1. It is currently pinned to the plugin API shipped with `opencode2 v0.0.0-next-15919`.
+
+Use version 1.x of this package with OpenCode V1.
 
 ## Installation
 
-Add `opencode-websearch-cited-fork` to your `~/.config/opencode/opencode.json`.
+Choose one provider and model in the plugin options:
 
-**IMPORTANT**: Put `opencode-websearch-cited-fork` LAST in the `plugin` list to avoid impacting other plugins' auth process, and disable the plugin before start any auth process.
-
-```json
+```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "...other plugins",
-    "opencode-websearch-cited-fork@1.4.0"
+  "plugins": [
+    {
+      "package": "opencode-websearch-cited-fork@2.0.0",
+      "options": {
+        "provider": "google",
+        "model": "gemini-2.5-flash"
+      }
+    }
   ]
 }
 ```
 
-OpenCode does not upgrade plugins automatically, so you need to pin the version once the plugin upgraded.
+Supported `provider` values are `google`, `openai`, and `openrouter`. Both `provider` and `model` are required.
 
-As long as the plugin is enabled and the provider auth is configured, any OpenCode agent that can use tools will be able to call `websearch_cited` when it needs web search with citations.
+OpenCode does not automatically upgrade a pinned plugin version. Update the package version after installing a compatible release.
 
----
+## Authentication
 
-## Configure web search
+Run `/connect` in OpenCode V2 and connect the provider selected in the plugin options. The plugin resolves the active connection when the tool runs, including stored keys, environment connections, and OpenAI OAuth credentials.
 
-Log in with `opencode auth login` first.
+Provider `settings.apiKey` is also used when there is no active integration connection. Use environment substitution rather than storing a key directly:
 
-For google support, this plugin is compatible with:
-- API Key via opencode auth, or
-- [opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth.git)
-
-Set a `websearch_cited` model in your OpenCode config (required)
-
-```json
+```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "openrouter": {
-      "options": {
-        "websearch_cited": {
-          "model": "x-ai/grok-4.1-fast"
-        }
-      }
-    },
-    "openai": {
-      "options": {
-        "websearch_cited": {
-          "model": "gpt-5.2"
-        }
-      }
-    },
+  "providers": {
     "google": {
-      "options": {
-        "websearch_cited": {
-          "model": "gemini-2.5-flash"
-        }
+      "settings": {
+        "apiKey": "{env:GOOGLE_GENERATIVE_AI_API_KEY}"
       }
     }
   }
 }
 ```
 
-If you specify multiple `websearch_cited.models` fields in your `opencode.json`, the plugin scans `provider` entries in order and uses the first provider that contains `options.websearch_cited.model`. **The order matters**.
+The V1 `opencode-antigravity-auth` plugin does not load in OpenCode V2. Google OAuth through that plugin is therefore not a supported V2 authentication path; use a Google API key until a compatible V2 integration is available.
 
-If auth or model config is missing, `websearch_cited` throws an error and OpenCode will display the message.
+## Provider Settings
 
----
+The plugin reads normal provider and selected-model `settings` for request behavior. For example, configure a Google-compatible proxy with `settings.baseURL`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "google": {
+      "settings": {
+        "baseURL": "https://proxy.example.test/v1beta"
+      }
+    }
+  }
+}
+```
+
+The OpenAI client recognizes these settings:
+
+- `reasoningEffort`
+- `reasoningSummary`
+- `textVerbosity`
+- `store`
+- `include`
+
+Selected-model settings override provider settings.
+
+If authentication or plugin options are missing, `websearch_cited` throws an error that OpenCode displays to the agent.
 
 ## Development
 
 This repository uses Bun and TypeScript.
 
 ```bash
-# Install dependencies
 bun install
-
-# Run tests after any change
+bun check
 bun test:agent
+bun run build
 ```
 
-When testing the plugin against a globally installed `opencode` CLI during development, you can point OpenCode at a local checkout using a `file://` URL in your `opencode.jsonc`:
+To test a local checkout with OpenCode V2, use an explicit local package entry and pass the same options:
 
-```json
+```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file:///path/to/opencode-websearch-cited/index.ts"]
+  "plugins": [
+    {
+      "package": "file:///path/to/opencode-websearch-cited/index.ts",
+      "options": {
+        "provider": "google",
+        "model": "gemini-2.5-flash"
+      }
+    }
+  ]
 }
 ```
 
-Contributions and feedback are welcome.
+Confirm that OpenCode loaded the plugin:
+
+```bash
+opencode2 api get /api/plugin
+```
+
+The active plugin list should contain `opencode.websearch-cited`.

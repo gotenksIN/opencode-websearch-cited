@@ -1,5 +1,4 @@
-import type { Auth as ProviderAuth } from "@opencode-ai/sdk";
-import type { GetAuth, WebsearchClient } from "./types.ts";
+import type { GetAuth, ProviderAuth, WebsearchClient } from "./types.ts";
 
 type OpenRouterPluginWeb = {
 	id: "web";
@@ -52,7 +51,7 @@ function buildWebSearchUserPrompt(query: string): string {
 }
 
 function getApiKey(auth: ProviderAuth): string {
-	if (auth.type !== "api") {
+	if (auth.type !== "key") {
 		throw new Error("OpenRouter only supports API key authentication");
 	}
 

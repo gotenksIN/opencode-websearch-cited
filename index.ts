@@ -1,4 +1,4 @@
-import { type Config, type Plugin, tool } from "@opencode-ai/plugin";
+import { Plugin } from "@opencode-ai/plugin/v2";
 
 import { createGoogleWebsearchClient, type GoogleWebsearchConfig } from "./src/google.ts";
 import { createOpenAIWebsearchClient, type OpenAIWebsearchConfig } from "./src/openai.ts";
@@ -12,31 +12,10 @@ const OPENROUTER_PROVIDER_ID = "openrouter";
 const CITED_SEARCH_TOOL_DESCRIPTION =
 	"Performs a Gemini-style grounded web search: returns a concise digest with inline citations and a Sources list of URLs. NOTE: for LLM rate limits, DO NOT parallel this tool > 5";
 
-const WEBSEARCH_ARGS = {
-	query: tool.schema.string().describe("The natural language web search query."),
-} as const;
-
-const WEBSEARCH_ALLOWED_KEYS = new Set(Object.keys(WEBSEARCH_ARGS));
-
-const WEBSEARCH_ALLOWED_KEYS_DESCRIPTION = Array.from(WEBSEARCH_ALLOWED_KEYS)
-	.map((key) => `'${key}'`)
-	.join(", ");
+const WEBSEARCH_ALLOWED_KEYS = new Set(["query"]);
+const WEBSEARCH_TIMEOUT_MS = 120_000;
 
 type SelectedProviderID = typeof GOOGLE_PROVIDER_ID | typeof OPENAI_PROVIDER_ID | typeof OPENROUTER_PROVIDER_ID;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-const authRegistry = new Map<string, GetAuth>();
-
-function registerGetAuth(providerID: string, getAuth: GetAuth): void {
-	authRegistry.set(providerID, getAuth);
-}
-
-function resolveGetAuth(providerID: string): GetAuth | undefined {
-	return authRegistry.get(providerID);
-}
 
 type SelectedWebsearchConfig = {
 	providerID: SelectedProviderID;
@@ -48,113 +27,67 @@ type WebsearchCitedSelection = {
 	error?: string;
 };
 
-function findFirstWebsearchCitedConfig(config: Config): WebsearchCitedSelection {
-	const providers = config.provider;
-	if (!providers || typeof providers !== "object") {
-		return {};
-	}
-
-	let firstError: string | undefined;
-
-	for (const [providerID, providerConfig] of Object.entries(providers)) {
-		if (!providerConfig || typeof providerConfig !== "object") {
-			continue;
-		}
-
-		const options = (providerConfig as { options?: unknown }).options;
-		if (!isRecord(options)) {
-			continue;
-		}
-
-		if (!("websearch_cited" in options)) {
-			continue;
-		}
-
-		const cited = options.websearch_cited;
-		if (!isRecord(cited)) {
-			firstError ??= `Invalid websearch_cited configuration for provider "${providerID}".`;
-			continue;
-		}
-
-		const candidate = cited.model;
-		if (typeof candidate !== "string" || candidate.trim() === "") {
-			firstError ??= `Missing websearch_cited model for provider "${providerID}".`;
-			continue;
-		}
-
-		if (
-			providerID !== GOOGLE_PROVIDER_ID &&
-			providerID !== OPENAI_PROVIDER_ID &&
-			providerID !== OPENROUTER_PROVIDER_ID
-		) {
-			firstError ??= `Unsupported provider "${providerID}" for websearch_cited.`;
-			continue;
-		}
-
-		return {
-			selected: {
-				providerID: providerID as SelectedProviderID,
-				model: candidate.trim(),
-			},
-		};
-	}
-
-	return firstError ? { error: firstError } : {};
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function parseOpenAIOptions(providerConfig: unknown, model: string | undefined): OpenAIWebsearchConfig {
-	if (!isRecord(providerConfig)) {
+function selectWebsearchConfig(options: unknown): WebsearchCitedSelection {
+	if (!isRecord(options)) {
 		return {};
 	}
 
-	const providerRecord = providerConfig;
-
-	const rawOptions = (providerRecord as { options?: unknown }).options;
-	const baseOptions = isRecord(rawOptions) ? rawOptions : undefined;
-
-	let modelOptions: Record<string, unknown> | undefined;
-	const rawModels = (providerRecord as { models?: unknown }).models;
-	if (model && isRecord(rawModels)) {
-		const modelsRecord: Record<string, unknown> = rawModels;
-		const entry = modelsRecord[model];
-		if (isRecord(entry)) {
-			const entryOptions = (entry as { options?: unknown }).options;
-			if (isRecord(entryOptions)) {
-				modelOptions = entryOptions;
-			}
-		}
+	const providerID = options.provider;
+	const model = options.model;
+	if (providerID === undefined && model === undefined) {
+		return {};
+	}
+	if (typeof providerID !== "string" || providerID.trim() === "") {
+		return { error: "Missing websearch_cited provider configuration." };
+	}
+	if (providerID !== GOOGLE_PROVIDER_ID && providerID !== OPENAI_PROVIDER_ID && providerID !== OPENROUTER_PROVIDER_ID) {
+		return { error: `Unsupported provider "${providerID}" for websearch_cited.` };
+	}
+	if (typeof model !== "string" || model.trim() === "") {
+		return { error: `Missing websearch_cited model for provider "${providerID}".` };
 	}
 
-	const merged: Record<string, unknown> = {
-		...(baseOptions ?? {}),
-		...(modelOptions ?? {}),
+	return {
+		selected: {
+			providerID,
+			model: model.trim(),
+		},
 	};
+}
+
+function parseOpenAIOptions(settings: unknown): OpenAIWebsearchConfig {
+	if (!isRecord(settings)) {
+		return {};
+	}
 
 	const result: OpenAIWebsearchConfig = {};
-
-	const reasoningEffort = merged.reasoningEffort;
+	const reasoningEffort = settings.reasoningEffort;
 	if (typeof reasoningEffort === "string" && reasoningEffort.trim() !== "") {
 		result.reasoningEffort = reasoningEffort.trim();
 	}
 
-	const reasoningSummary = merged.reasoningSummary;
+	const reasoningSummary = settings.reasoningSummary;
 	if (typeof reasoningSummary === "string" && reasoningSummary.trim() !== "") {
 		result.reasoningSummary = reasoningSummary.trim();
 	}
 
-	const textVerbosity = merged.textVerbosity;
+	const textVerbosity = settings.textVerbosity;
 	if (typeof textVerbosity === "string" && textVerbosity.trim() !== "") {
 		result.textVerbosity = textVerbosity.trim();
 	}
 
-	const store = merged.store;
+	const store = settings.store;
 	if (typeof store === "boolean") {
 		result.store = store;
 	}
 
-	const include = merged.include;
+	const include = settings.include;
 	if (Array.isArray(include)) {
-		const filtered = include.filter((value) => typeof value === "string" && value.trim() !== "");
+		const filtered = include.filter((value): value is string => typeof value === "string" && value.trim() !== "");
 		if (filtered.length > 0) {
 			result.include = filtered;
 		}
@@ -163,18 +96,13 @@ function parseOpenAIOptions(providerConfig: unknown, model: string | undefined):
 	return result;
 }
 
-function parseGoogleOptions(providerConfig: unknown): GoogleWebsearchConfig {
-	if (!isRecord(providerConfig)) {
-		return {};
-	}
-
-	const rawOptions = providerConfig.options;
-	if (!isRecord(rawOptions)) {
+function parseGoogleOptions(settings: unknown): GoogleWebsearchConfig {
+	if (!isRecord(settings)) {
 		return {};
 	}
 
 	const result: GoogleWebsearchConfig = {};
-	const baseURL = rawOptions.baseURL;
+	const baseURL = settings.baseURL;
 	if (typeof baseURL === "string" && baseURL.trim() !== "") {
 		result.baseURL = baseURL.trim();
 	}
@@ -182,64 +110,66 @@ function parseGoogleOptions(providerConfig: unknown): GoogleWebsearchConfig {
 	return result;
 }
 
-const WebsearchCitedPlugin: Plugin = () => {
-	let selectedProvider: SelectedProviderID | undefined;
-	let selectedModel: string | undefined;
-	let openaiConfig: OpenAIWebsearchConfig = {};
-	let googleConfig: GoogleWebsearchConfig = {};
-	let configError: string | undefined;
+const WebsearchCitedPlugin = Plugin.define({
+	id: "opencode.websearch-cited",
+	setup: async (ctx) => {
+		const { selected, error: configError } = selectWebsearchConfig(ctx.options);
+		let openaiConfig: OpenAIWebsearchConfig = {};
+		let googleConfig: GoogleWebsearchConfig = {};
+		let integrationID: string | undefined = selected?.providerID;
+		let selectedSettings: Record<string, unknown> = {};
 
-	return Promise.resolve({
-		auth: {
-			provider: OPENROUTER_PROVIDER_ID,
-			loader(getAuth) {
-				registerGetAuth(OPENROUTER_PROVIDER_ID, getAuth);
-				return Promise.resolve({});
-			},
-			methods: [
-				{
-					type: "api",
-					label: "OpenRouter API key",
-				},
-			],
-		},
-		config: (config) => {
-			const { selected, error } = findFirstWebsearchCitedConfig(config);
+		if (selected) {
+			await ctx.catalog.transform((catalog) => {
+				const record = catalog.provider.get(selected.providerID);
+				integrationID = record?.provider.integrationID ?? selected.providerID;
+				selectedSettings = {
+					...record?.provider.settings,
+					...record?.models.get(selected.model)?.settings,
+				};
+				openaiConfig = selected.providerID === OPENAI_PROVIDER_ID ? parseOpenAIOptions(selectedSettings) : {};
+				googleConfig = selected.providerID === GOOGLE_PROVIDER_ID ? parseGoogleOptions(selectedSettings) : {};
+			});
+		}
 
-			selectedProvider = undefined;
-			selectedModel = undefined;
-			openaiConfig = {};
-			googleConfig = {};
-			configError = error;
-
-			if (selected) {
-				selectedProvider = selected.providerID;
-				selectedModel = selected.model;
-				if (selectedProvider === OPENAI_PROVIDER_ID) {
-					const openaiProvider = config.provider?.openai;
-					openaiConfig = parseOpenAIOptions(openaiProvider, selectedModel);
+		const getAuth =
+			(providerID: SelectedProviderID): GetAuth =>
+			async () => {
+				const connection = await ctx.integration.connection.active(integrationID ?? providerID);
+				if (connection) {
+					const credential = await ctx.integration.connection.resolve(connection);
+					if (credential) {
+						return credential;
+					}
 				}
-				if (selectedProvider === GOOGLE_PROVIDER_ID) {
-					googleConfig = parseGoogleOptions(config.provider?.google);
-				}
-			}
+				const apiKey = selectedSettings.apiKey;
+				return typeof apiKey === "string" && apiKey.trim() !== "" ? { type: "key", key: apiKey } : undefined;
+			};
 
-			return Promise.resolve();
-		},
-		tool: {
-			websearch_cited: tool({
+		await ctx.tool.transform((tools) => {
+			tools.add({
+				name: "websearch_cited",
+				options: { codemode: false },
 				description: CITED_SEARCH_TOOL_DESCRIPTION,
-				args: WEBSEARCH_ARGS,
-				async execute(args, context) {
-					const argKeys = Object.keys(args ?? {});
-					const extraKeys = argKeys.filter((key) => !WEBSEARCH_ALLOWED_KEYS.has(key));
+				jsonSchema: {
+					type: "object",
+					properties: {
+						query: {
+							type: "string",
+							description: "The natural language web search query.",
+						},
+					},
+					required: ["query"],
+					additionalProperties: false,
+				},
+				async execute(input) {
+					const args = isRecord(input) ? input : {};
+					const extraKeys = Object.keys(args).filter((key) => !WEBSEARCH_ALLOWED_KEYS.has(key));
 					if (extraKeys.length > 0) {
-						throw new Error(
-							`Unknown argument(s): ${extraKeys.join(", ")}, only ${WEBSEARCH_ALLOWED_KEYS_DESCRIPTION} supported.`
-						);
+						throw new Error(`Unknown argument(s): ${extraKeys.join(", ")}, only 'query' supported.`);
 					}
 
-					const query = args.query?.trim();
+					const query = typeof args.query === "string" ? args.query.trim() : "";
 					if (!query) {
 						throw new Error("The 'query' parameter cannot be empty.");
 					}
@@ -247,78 +177,31 @@ const WebsearchCitedPlugin: Plugin = () => {
 					if (configError) {
 						throw new Error(configError);
 					}
-
-					if (!selectedProvider || !selectedModel) {
+					if (!selected) {
 						throw new Error("Missing web search model configuration.");
 					}
 
-					if (selectedProvider === OPENAI_PROVIDER_ID) {
-						const getAuth = resolveGetAuth(OPENAI_PROVIDER_ID);
-						if (!getAuth) {
-							throw new Error('Missing auth for provider "openai". Authenticate via `opencode auth login`.');
-						}
-
-						const client = createOpenAIWebsearchClient(selectedModel, openaiConfig);
-						return client.search(query, context.abort, getAuth);
+					const abortSignal = AbortSignal.timeout(WEBSEARCH_TIMEOUT_MS);
+					let text: string;
+					if (selected.providerID === OPENAI_PROVIDER_ID) {
+						const client = createOpenAIWebsearchClient(selected.model, openaiConfig);
+						text = await client.search(query, abortSignal, getAuth(selected.providerID));
+					} else if (selected.providerID === OPENROUTER_PROVIDER_ID) {
+						const client = createOpenRouterWebsearchClient(selected.model);
+						text = await client.search(query, abortSignal, getAuth(selected.providerID));
+					} else {
+						const client = createGoogleWebsearchClient(selected.model, googleConfig);
+						text = await client.search(query, abortSignal, getAuth(selected.providerID));
 					}
 
-					if (selectedProvider === OPENROUTER_PROVIDER_ID) {
-						const getAuth = resolveGetAuth(OPENROUTER_PROVIDER_ID);
-						if (!getAuth) {
-							throw new Error('Missing auth for provider "openrouter". Authenticate via `opencode auth login`.');
-						}
-
-						const client = createOpenRouterWebsearchClient(selectedModel);
-						return client.search(query, context.abort, getAuth);
-					}
-
-					const getAuth = resolveGetAuth(GOOGLE_PROVIDER_ID);
-					if (!getAuth) {
-						throw new Error('Missing auth for provider "google". Authenticate via `opencode auth login`.');
-					}
-
-					const client = createGoogleWebsearchClient(selectedModel, googleConfig);
-					return client.search(query, context.abort, getAuth);
+					return {
+						structured: { text },
+						content: [{ type: "text", text }],
+					};
 				},
-			}),
-		},
-	});
-};
-
-export const WebsearchCitedGooglePlugin: Plugin = () => {
-	return Promise.resolve({
-		auth: {
-			provider: GOOGLE_PROVIDER_ID,
-			loader(getAuth) {
-				registerGetAuth(GOOGLE_PROVIDER_ID, getAuth);
-				return Promise.resolve({});
-			},
-			methods: [
-				{
-					type: "api",
-					label: "Google API key",
-				},
-			],
-		},
-	});
-};
-
-export const WebsearchCitedOpenAIPlugin: Plugin = () => {
-	return Promise.resolve({
-		auth: {
-			provider: OPENAI_PROVIDER_ID,
-			loader(getAuth) {
-				registerGetAuth(OPENAI_PROVIDER_ID, getAuth);
-				return Promise.resolve({});
-			},
-			methods: [
-				{
-					type: "api",
-					label: "OpenAI API key",
-				},
-			],
-		},
-	});
-};
+			});
+		});
+	},
+});
 
 export default WebsearchCitedPlugin;
