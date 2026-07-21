@@ -117,15 +117,18 @@ const WebsearchCitedPlugin = Plugin.define({
 		let openaiConfig: OpenAIWebsearchConfig = {};
 		let googleConfig: GoogleWebsearchConfig = {};
 		let integrationID: string | undefined = selected?.providerID;
+		let requestModel = selected?.model;
 		let selectedSettings: Record<string, unknown> = {};
 
 		if (selected) {
 			await ctx.catalog.transform((catalog) => {
 				const record = catalog.provider.get(selected.providerID);
+				const model = record?.models.get(selected.model);
 				integrationID = record?.provider.integrationID ?? selected.providerID;
+				requestModel = model?.modelID ?? selected.model;
 				selectedSettings = {
 					...record?.provider.settings,
-					...record?.models.get(selected.model)?.settings,
+					...model?.settings,
 				};
 				openaiConfig = selected.providerID === OPENAI_PROVIDER_ID ? parseOpenAIOptions(selectedSettings) : {};
 				googleConfig = selected.providerID === GOOGLE_PROVIDER_ID ? parseGoogleOptions(selectedSettings) : {};
@@ -182,15 +185,16 @@ const WebsearchCitedPlugin = Plugin.define({
 					}
 
 					const abortSignal = AbortSignal.timeout(WEBSEARCH_TIMEOUT_MS);
+					const model = requestModel ?? selected.model;
 					let text: string;
 					if (selected.providerID === OPENAI_PROVIDER_ID) {
-						const client = createOpenAIWebsearchClient(selected.model, openaiConfig);
+						const client = createOpenAIWebsearchClient(model, openaiConfig);
 						text = await client.search(query, abortSignal, getAuth(selected.providerID));
 					} else if (selected.providerID === OPENROUTER_PROVIDER_ID) {
-						const client = createOpenRouterWebsearchClient(selected.model);
+						const client = createOpenRouterWebsearchClient(model);
 						text = await client.search(query, abortSignal, getAuth(selected.providerID));
 					} else {
-						const client = createGoogleWebsearchClient(selected.model, googleConfig);
+						const client = createGoogleWebsearchClient(model, googleConfig);
 						text = await client.search(query, abortSignal, getAuth(selected.providerID));
 					}
 

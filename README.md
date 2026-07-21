@@ -66,7 +66,7 @@ Provider `settings.apiKey` is also used when there is no active integration conn
 }
 ```
 
-The V1 `opencode-antigravity-auth` plugin does not load in OpenCode V2. Google OAuth through that plugin is therefore not a supported V2 authentication path; use a Google API key until a compatible V2 integration is available.
+The V1 `opencode-antigravity-auth` plugin does not load in OpenCode V2. Google OAuth credentials are accepted only from a compatible V2 integration using the `antigravity` method ID; use a Google API key until one is available.
 
 ## Provider Settings
 

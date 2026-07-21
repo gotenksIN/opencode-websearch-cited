@@ -75,6 +75,7 @@ export type GoogleWebsearchConfig = {
 
 type OAuthAuthDetails = {
 	type: "oauth";
+	methodID: string;
 	access?: string;
 	refresh?: string;
 	expires?: unknown;
@@ -96,6 +97,7 @@ interface WebSearchClient {
 }
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const ANTIGRAVITY_OAUTH_METHOD_ID = "antigravity";
 const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 const ANTIGRAVITY_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 const ANTIGRAVITY_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
@@ -828,6 +830,9 @@ function createWebSearchClientForGoogle(
 	}
 
 	if (authDetails.type === "oauth") {
+		if (authDetails.methodID !== ANTIGRAVITY_OAUTH_METHOD_ID) {
+			throw new Error(`Unsupported Google OAuth method "${authDetails.methodID}" for web search`);
+		}
 		const oauthAuth = authDetails as OAuthAuthDetails;
 		return createGeminiOAuthWebSearchClient(oauthAuth, model);
 	}

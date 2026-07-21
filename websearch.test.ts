@@ -6,14 +6,16 @@ import type { ProviderAuth } from "./src/types.ts";
 
 type ProviderConfig = {
 	options?: Record<string, unknown>;
-	models?: Record<string, { options?: Record<string, unknown> }>;
+	models?: Record<string, { modelID?: string; options?: Record<string, unknown> }>;
 };
 
 type Config = {
 	provider?: Record<string, ProviderConfig>;
 };
 
-type TestAuth = { type: "key"; key: string } | { type: "oauth"; access: string; refresh: string; expires?: number };
+type TestAuth =
+	| { type: "key"; key: string }
+	| { type: "oauth"; methodID?: string; access: string; refresh: string; expires?: number };
 
 const WEBSEARCH_CONFIG: Config = {
 	provider: {
@@ -492,6 +494,38 @@ describe("WebsearchCitedPlugin", () => {
 		expect(typeof url === "string" ? url : "").toContain("gemini-custom-model");
 	});
 
+	it("uses the upstream modelID for a catalog alias", async () => {
+		fetchMock.mockResolvedValueOnce(
+			createFetchResponse(
+				createResponse({
+					content: {
+						role: "model",
+						parts: [{ text: "Aliased model response" }],
+					},
+				})
+			)
+		);
+
+		const { hooks, tool } = await createEnv({
+			provider: {
+				google: {
+					options: {
+						websearch_cited: { model: "search" },
+					},
+					models: {
+						search: { modelID: "gemini-upstream-model" },
+					},
+				},
+			},
+		});
+		await setCredential(hooks, "google", { type: "key", key: "stored-key" });
+
+		await tool.execute({ query: "model query" }, createToolContext());
+
+		const [url] = fetchMock.mock.calls[0] ?? [];
+		expect(typeof url === "string" ? url : "").toContain("gemini-upstream-model");
+	});
+
 	it("normalizes a trailing slash in the configured Google baseURL", async () => {
 		fetchMock.mockResolvedValueOnce(
 			createFetchResponse(
@@ -552,6 +586,23 @@ describe("WebsearchCitedPlugin", () => {
 
 		const [url] = fetchMock.mock.calls[0] ?? [];
 		expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/models/gemini-custom-model:generateContent");
+	});
+
+	it("rejects unsupported Google OAuth methods", async () => {
+		const { hooks, tool } = await createEnv(WEBSEARCH_CONFIG);
+		await setCredential(hooks, "google", {
+			type: "oauth",
+			methodID: "other-google-oauth",
+			access: "test-access-token",
+			refresh: "test-refresh-token",
+			expires: Date.now() + 120_000,
+		});
+
+		await expectThrowMessage(
+			() => tool.execute({ query: "oauth query" }, createToolContext()),
+			'Unsupported Google OAuth method "other-google-oauth"'
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("uses Code Assist endpoint and project when Google OAuth is present", async () => {
@@ -1406,7 +1457,10 @@ function createCatalogDraft(config?: Config): unknown {
 				return {
 					provider: { settings },
 					models: new Map(
-						Object.entries(provider.models ?? {}).map(([model, value]) => [model, { settings: value.options }])
+						Object.entries(provider.models ?? {}).map(([model, value]) => [
+							model,
+							{ modelID: value.modelID ?? model, settings: value.options },
+						])
 					),
 				};
 			},
@@ -1426,7 +1480,7 @@ async function setCredential(hooks: Hooks[], providerID: string, value: TestAuth
 	if (value.type === "oauth") {
 		auth.set(providerID, {
 			type: "oauth",
-			methodID: "test",
+			methodID: value.methodID ?? "antigravity",
 			access: value.access,
 			refresh: value.refresh,
 			expires: value.expires ?? 0,
