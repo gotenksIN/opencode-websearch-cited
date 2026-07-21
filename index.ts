@@ -114,38 +114,18 @@ const WebsearchCitedPlugin = Plugin.define({
 	id: "opencode.websearch-cited",
 	setup: async (ctx) => {
 		const { selected, error: configError } = selectWebsearchConfig(ctx.options);
-		let openaiConfig: OpenAIWebsearchConfig = {};
-		let googleConfig: GoogleWebsearchConfig = {};
-		let integrationID: string | undefined = selected?.providerID;
-		let requestModel = selected?.model;
-		let selectedSettings: Record<string, unknown> = {};
-
-		if (selected) {
-			await ctx.catalog.transform((catalog) => {
-				const record = catalog.provider.get(selected.providerID);
-				const model = record?.models.get(selected.model);
-				integrationID = record?.provider.integrationID ?? selected.providerID;
-				requestModel = model?.modelID ?? selected.model;
-				selectedSettings = {
-					...record?.provider.settings,
-					...model?.settings,
-				};
-				openaiConfig = selected.providerID === OPENAI_PROVIDER_ID ? parseOpenAIOptions(selectedSettings) : {};
-				googleConfig = selected.providerID === GOOGLE_PROVIDER_ID ? parseGoogleOptions(selectedSettings) : {};
-			});
-		}
 
 		const getAuth =
-			(providerID: SelectedProviderID): GetAuth =>
+			(integrationID: string, settings: Record<string, unknown>): GetAuth =>
 			async () => {
-				const connection = await ctx.integration.connection.active(integrationID ?? providerID);
+				const connection = await ctx.integration.connection.active(integrationID);
 				if (connection) {
 					const credential = await ctx.integration.connection.resolve(connection);
 					if (credential) {
 						return credential;
 					}
 				}
-				const apiKey = selectedSettings.apiKey;
+				const apiKey = settings.apiKey;
 				return typeof apiKey === "string" && apiKey.trim() !== "" ? { type: "key", key: apiKey } : undefined;
 			};
 
@@ -184,18 +164,29 @@ const WebsearchCitedPlugin = Plugin.define({
 						throw new Error("Missing web search model configuration.");
 					}
 
+					const [provider, catalogModel] = await Promise.all([
+						ctx.catalog.provider.get({ providerID: selected.providerID }),
+						ctx.catalog.model.get(selected.providerID, selected.model),
+					]);
+					const settings = {
+						...provider.data.settings,
+						...catalogModel?.settings,
+					};
+					const integrationID = provider.data.integrationID ?? selected.providerID;
+					const model = catalogModel?.modelID ?? selected.model;
 					const abortSignal = AbortSignal.timeout(WEBSEARCH_TIMEOUT_MS);
-					const model = requestModel ?? selected.model;
 					let text: string;
 					if (selected.providerID === OPENAI_PROVIDER_ID) {
+						const openaiConfig = parseOpenAIOptions(settings);
 						const client = createOpenAIWebsearchClient(model, openaiConfig);
-						text = await client.search(query, abortSignal, getAuth(selected.providerID));
+						text = await client.search(query, abortSignal, getAuth(integrationID, settings));
 					} else if (selected.providerID === OPENROUTER_PROVIDER_ID) {
 						const client = createOpenRouterWebsearchClient(model);
-						text = await client.search(query, abortSignal, getAuth(selected.providerID));
+						text = await client.search(query, abortSignal, getAuth(integrationID, settings));
 					} else {
+						const googleConfig = parseGoogleOptions(settings);
 						const client = createGoogleWebsearchClient(model, googleConfig);
-						text = await client.search(query, abortSignal, getAuth(selected.providerID));
+						text = await client.search(query, abortSignal, getAuth(integrationID, settings));
 					}
 
 					return {

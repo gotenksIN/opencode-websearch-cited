@@ -1376,12 +1376,26 @@ async function createEnv(
 	const auth = new Map<string, ProviderAuth>();
 	const hooks = [{ auth }];
 	const registered: RegisteredTool[] = [];
+	let setupComplete = false;
 	const context = {
 		options: pluginOptions,
 		catalog: {
-			transform: async (transform: (draft: unknown) => void) => {
-				transform(createCatalogDraft(config));
-				return { dispose: async () => {} };
+			provider: {
+				get: async ({ providerID }: { providerID: string }) => {
+					if (!setupComplete) {
+						throw new Error("Catalog unavailable during plugin setup");
+					}
+					return { data: createCatalogProvider(config, providerID) };
+				},
+			},
+			model: {
+				get: async (providerID: string, modelID: string) => {
+					if (!setupComplete) {
+						throw new Error("Catalog unavailable during plugin setup");
+					}
+					const model = config?.provider?.[providerID]?.models?.[modelID];
+					return model ? { modelID: model.modelID ?? modelID, settings: model.options } : undefined;
+				},
 			},
 		},
 		integration: {
@@ -1401,6 +1415,7 @@ async function createEnv(
 	} as unknown as Plugin.Context;
 
 	await plugin.setup(context);
+	setupComplete = true;
 	const selected = registered.filter((candidate) => candidate.name === "websearch_cited");
 	if (selected.length !== 1) {
 		throw new Error('Tool "websearch_cited" not registered');
@@ -1444,27 +1459,13 @@ function selectPluginOptions(config?: Config): Record<string, unknown> {
 	return firstInvalid ?? {};
 }
 
-function createCatalogDraft(config?: Config): unknown {
+function createCatalogProvider(config: Config | undefined, providerID: string) {
+	const settings = { ...config?.provider?.[providerID]?.options };
+	delete settings.websearch_cited;
 	return {
-		provider: {
-			get(providerID: string) {
-				const provider = config?.provider?.[providerID];
-				if (!provider) {
-					return undefined;
-				}
-				const settings = { ...provider.options };
-				delete settings.websearch_cited;
-				return {
-					provider: { settings },
-					models: new Map(
-						Object.entries(provider.models ?? {}).map(([model, value]) => [
-							model,
-							{ modelID: value.modelID ?? model, settings: value.options },
-						])
-					),
-				};
-			},
-		},
+		id: providerID,
+		integrationID: providerID,
+		settings,
 	};
 }
 

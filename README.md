@@ -33,7 +33,7 @@ Choose one provider and model in the plugin options:
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "opencode-websearch-cited-fork@2.0.0",
+      "package": "opencode-websearch-cited-fork@2.0.1",
       "options": {
         "provider": "google",
         "model": "gemini-2.5-flash"
